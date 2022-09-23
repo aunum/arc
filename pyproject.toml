@@ -1,0 +1,65 @@
+[tool.poetry]
+# https://github.com/python-poetry/poetry/issues/705
+name = "arc"
+version = "0.0.1"
+description = "Economies of models"
+authors = ["Patrick Barker <patrickbarkerco@gmail.com>"]
+license = "Apache 2.0"
+
+[tool.poetry.dependencies]
+python = ">=3.10.1,<3.11"
+pandas = "^1.3.5"
+numpy = "^1.22.1"
+inflection = "^0.5.1"
+dataclasses-jsonschema = "^2.15.0"
+dacite = "^1.6.0"
+"hurry.filesize" = "^0.9"
+GitPython = "^3.1.26"
+tomli = "1.2.3"
+docker = "^5.0.3"
+enlighten = "^1.10.2"
+docker-image-py = "^0.1.12"
+cloudpickle = "^2.0.0"
+tableschema = "^1.20.2"
+xdg = "^5.1.1"
+scikit-learn = "^1.0.2"
+schema = "^0.7.5"
+opencontainers = { extras = ["reggie"], version = "^0.0.12" }
+genson = "^1.2.2"
+rootpath = "^0.1.1"
+simple-parsing = "0.0.20"
+starlette = "^0.20.3"
+tabulate = "^0.8.10"
+ocifacts = "^0.0.1"
+types-tabulate = "^0.8.11"
+websocket-client = "^1.3.3"
+uvicorn = { extras = ["standard"], version = "^0.18.2" }
+blobz = "0.0.13"
+kubernetes = "24.2.0"
+typeguard = "^2.13.3"
+
+[tool.poetry.dev-dependencies]
+black = "^21.12b0"
+flake8 = "^4.0.1"
+isort = "^5.10.1"
+mypy = "^0.931"
+pylint = "^2.12.2"
+ipykernel = "^6.7.0"
+jupyter = "^1.0.0"
+pytest = "^6.2.5"
+python-mnist = "^0.7"
+tensorflow = "^2.9.1"
+
+[tool.arc]
+registry_url = "docker.io"
+image_repository = "oldoceancreature/arc"
+
+[tool.flake8]
+max-line-length = 120
+
+[tool.black]
+line-length = 120
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
