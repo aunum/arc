@@ -1,6 +1,6 @@
 # Functions
 
-Arc also offers a simple means of executing python functions on kubernetes
+Arc also offers a simple means of executing python functions on Kubernetes
 
 ```python
 from arc.kube.run import pod

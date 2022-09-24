@@ -31,7 +31,7 @@ If you need a kubernetes cluster, Arc works will with [kind](https://kind.sigs.k
 
 ## Quick Start
 
-See the [MNIST example](examples/mnist/README.md) for the full example
+See the [MNIST example](examples/mnist/classifier.py) for the full example
 
 ```python
 # Run a local model on Kubernetes, hot reloading code changes
@@ -60,7 +60,7 @@ y_pred = model.predict(sample_img)
 report = job.evaluate(model)
 ```
 
-## Concepts
+## Conceptsgi
 
 * [IO](./docs/io.md)
 * [Jobs](./docs/jobs.md)
@@ -87,6 +87,8 @@ report = job.evaluate(model)
 - [ ] Actors
 
 ### Data types
+- [x] Image
+- [x] Classes
 - [ ] Text
 - [ ] Multi-label
 - [ ] Video
@@ -103,8 +105,8 @@ report = job.evaluate(model)
 - [ ] Replicate
 
 ### UX
+- [ ] Docs
 - [ ] UI
 - [ ] Support a second language (Go or JS)
 - [ ] CLI
-- [ ] Docs
 - [ ] Slack Bot

@@ -3,6 +3,7 @@ Much of Arc's capabilities revolve around standardized IO for models and tasks. 
 
 Arc provides a set of basic data types for common ML tasks, a user can also implement the [Data class](arc/data/types.py) to extend the functionality to any data type.   
 
+Example types:
 ```python
 X: ImageData | TextData | VideoData | AudioData | TableData
 Y: ClassData | LabelData | TextData | ImageData  
