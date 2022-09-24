@@ -27,7 +27,7 @@ pip install arc-ai
 
 Arc only requires a working `KUBECONFIG` and an image repository. Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :)    
 
-If you need a kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally
+If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ See the [MNIST example](examples/mnist/classifier.py) for the full example
 # Run a local model on Kubernetes, hot reloading code changes
 model = ConvMultiClassImageClassifier.develop()
 
-# Run a local job on kubernetes, which will provid our training data and eval
+# Run a local job on Kubernetes, which will provide our training data and eval
 job = ClassifyDigitsJob.develop()
 
 # Sample one X and Y from the job
@@ -49,8 +49,6 @@ model.compile(sample_img, sample_class)
 # Stream data from the job and send it to the model to train
 for x, y in job.stream():
     metrics = model.fit(x, y)
-    print(metrics)
-
 
 # Sample from the job and use the trained model to predict
 sample_img, sample_class = job.sample(12)
@@ -66,8 +64,9 @@ report = job.evaluate(model)
 * [Jobs](./docs/jobs.md)
 * [Models](./docs/models.md)
 * [Trainer](./docs/trainer.md)
-* [Finder](./docs/finder.md)
 * [Functions](./docs/functions.md)
+* [Finder](./docs/finder.md)
+* [Predictor](./docs/predictor.md)
 
 ## Roadmap
 
