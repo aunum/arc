@@ -27,48 +27,6 @@ from arc.kube.pod_util import (
     wait_for_pod_running,
 )
 
-# NOTE: this requires Read Write Many volumes, could use Ceph/Rook
-def copy_file_to_volume(
-    src_path: str,
-    dest_path: str,
-    namespace: str,
-    volume_name: Optional[str] = None,
-    create: bool = True,
-    install: bool = True,
-    core_v1_api: Optional[CoreV1Api] = None,
-):
-    if core_v1_api is None:
-        config.load_kube_config()
-        core_v1_api = CoreV1Api()
-
-    # check for a RWX provider
-
-    # install Rook if needed
-
-    # check if volume exists
-
-    # create volume if needed
-
-    # create pod to copy to volume
-
-    # copy file to pod
-
-    # delete pod
-    raise NotImplementedError("not yet implemented")
-
-
-# Note: what file types does this support?
-def copy_file_to_queue(src_path: str, namespace: str, create: bool = True, core_v1_api: Optional[CoreV1Api] = None):
-    if core_v1_api is None:
-        config.load_kube_config()
-        core_v1_api = CoreV1Api()
-    # Check for queue
-
-    # Install if needed
-
-    # Run pod that downloads file, puts into queue
-    raise NotImplementedError("not yet implemented")
-
 
 def copy_file_to_pod(
     src_path: Union[List[str], str],

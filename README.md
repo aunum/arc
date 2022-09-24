@@ -109,3 +109,7 @@ report = job.evaluate(model)
 - [ ] Support a second language (Go or JS)
 - [ ] CLI
 - [ ] Slack Bot
+
+## Contributing
+
+Contributions are welcome, please open an issue

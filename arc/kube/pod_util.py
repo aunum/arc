@@ -222,18 +222,6 @@ def get_pod_name_from_func(func: Callable, scm: Optional[SCM] = None, cfg: Optio
     mod_clean = mod_name.replace(".", "-").replace("_", "-")
     name_clean = func.__name__.replace("_", "-")
 
-    # strategy = RemoteSyncStrategy.CONTAINER
-    # if cfg.remote_sync_strategy is not None:
-    #     strategy = cfg.remote_sync_strategy
-
-    # hash = ""
-    # if strategy == RemoteSyncStrategy.IMAGE:
-    #     hash = scm.sha()
-    # elif strategy == RemoteSyncStrategy.CONTAINER:
-    #     hash = scm.env_sha()
-    # else:
-    #     raise ValueError("uknown sync strategy")
-
     return f"fn-{mod_clean}-{name_clean}"
 
 
