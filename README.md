@@ -58,7 +58,7 @@ y_pred = model.predict(sample_img)
 report = job.evaluate(model)
 ```
 
-## Conceptsgi
+## Concepts
 
 * [IO](./docs/io.md)
 * [Jobs](./docs/jobs.md)
