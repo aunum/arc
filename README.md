@@ -2,7 +2,7 @@
 
 Arc is a declarative, minimalist, automation forward machine learning platform. It aims to commoditize models by standardizing their IO, making it easy to consume models from _any_ source using your language of choice.   
 
-Arc makes the machine learning development lifecycle incredibly lightweight and seemless. Arc models and datastreams can easily be shared and reused within a team, company, or the larger world.   
+Arc makes the machine learning development lifecycle lightweight and ergonomic. Arc models and jobs can easily be shared and reused within a team, company, or the larger world.   
 
 Arc makes use of its standardization patterns to provide rich automation around the selection, tuning, and hardening of models.
 
@@ -11,9 +11,8 @@ Arc makes use of its standardization patterns to provide rich automation around 
 ## Tenants
 
 * Lightwieght
-* Compositional, built out of primitives
+* Compositional
 * Explicit
-* Vizualiztion should be ubiquitos and free
 * Observable
 * Cloud native
 * Few dependencies
@@ -61,7 +60,7 @@ y_pred = model.predict(sample_img)
 report = job.evaluate(model)
 ```
 
-## Concepts
+## Conceptsgit 
 
 * [IO](./docs/io.md)
 * [Jobs](./docs/jobs.md)

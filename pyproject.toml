@@ -1,8 +1,9 @@
 [tool.poetry]
 # https://github.com/python-poetry/poetry/issues/705
-name = "arc"
+name = "arc-ai"
 version = "0.0.1"
 description = "Economies of models"
+packages = [{ include = "arc" }]
 authors = ["Patrick Barker <patrickbarkerco@gmail.com>"]
 license = "Apache 2.0"
 
