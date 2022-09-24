@@ -1,6 +1,6 @@
 ![logo](./static/logo.png "Logo")
 
-Arc is a declarative, minimalist, automation forward machine learning platform. It aims to commoditize models by standardizing their IO, making it easy to consume models from _any_ source using your language of choice.   
+Arc is a declarative, minimalist, automation-forward machine learning platform. It aims to commoditize models by standardizing their IO, making it easy to consume models from _any_ source using your language of choice.   
 
 Arc makes the machine learning development lifecycle lightweight and ergonomic. Arc models and jobs can easily be shared and reused within a team, company, or the larger world.   
 
@@ -22,7 +22,7 @@ Arc makes use of its standardization patterns to provide rich automation around 
 ## Installation
 
 ```sh
-pip install arc
+pip install arc-ai
 ```
 
 Arc only requires a working `KUBECONFIG` and an image repository. Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :)    
@@ -31,7 +31,7 @@ If you need a kubernetes cluster, Arc works will with [kind](https://kind.sigs.k
 
 ## Quick Start
 
-See the [MNIST example](examples/mnist/README.md) for full example
+See the [MNIST example](examples/mnist/README.md) for the full example
 
 ```python
 # Run a local model on Kubernetes, hot reloading code changes
@@ -56,11 +56,11 @@ for x, y in job.stream():
 sample_img, sample_class = job.sample(12)
 y_pred = model.predict(sample_img)
 
-# Evaluate the trained model for the job, returning a report
+# Evaluate the trained model on Kubernetes for the job, returning a report
 report = job.evaluate(model)
 ```
 
-## Conceptsgit 
+## Concepts
 
 * [IO](./docs/io.md)
 * [Jobs](./docs/jobs.md)
