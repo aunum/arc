@@ -379,14 +379,14 @@ class TrainerClient(Generic[X, Y]):
 
     def train(
         self,
-        job: SupervisedJob[X, Y] | SupervisedJobClient[X, Y] | str,
-        model: Optional[
-            SupervisedModel[X, Y]
-            | SupervisedModelClient[X, Y]
-            | List[SupervisedModel[X, Y] | SupervisedModelClient[X, Y]]
-            | str
-            | List[str]
-        ] = None,
+        job: Union[SupervisedJob[X, Y], SupervisedJobClient[X, Y],  str],
+        model: Optional[Union[
+            SupervisedModel[X, Y],
+            SupervisedModelClient[X, Y],
+            List[Union[SupervisedModel[X, Y], SupervisedModelClient[X, Y]]],
+            str,
+            List[str],
+        ]] = None,
         max_parallel: int = 10,
         max_search: int = 20,
         evaluate: bool = True,
@@ -466,15 +466,15 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
 
     def train(
         self,
-        job: SupervisedJob[X, Y] | SupervisedJobClient[X, Y] | str,
-        model: Optional[
-            SupervisedModel[X, Y]
-            | SupervisedModelClient[X, Y]
-            | List[SupervisedModel[X, Y]]
-            | List[SupervisedModelClient[X, Y]]
-            | str
-            | List[str]
-        ] = None,
+        job: Union[SupervisedJob[X, Y], SupervisedJobClient[X, Y], str],
+        model: Optional[Union[
+            SupervisedModel[X, Y],
+            SupervisedModelClient[X, Y],
+            List[SupervisedModel[X, Y]],
+            List[SupervisedModelClient[X, Y]],
+            str,
+            List[str]
+        ]] = None,
         max_parallel: int = 10,
         max_search: int = 20,
         evaluate: bool = True,
@@ -493,7 +493,7 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
         x_cls: Type[X] = args[0]
         y_cls: Type[Y] = args[1]
 
-        models: List[SupervisedModel[x_cls, y_cls] | SupervisedModelClient[x_cls, y_cls]] = []
+        models: List[Union[SupervisedModel[x_cls, y_cls], SupervisedModelClient[x_cls, y_cls]]] = []
         if isinstance(model, SupervisedModel) or isinstance(model, SupervisedModelClient):
             models = [model]
         elif isinstance(model, str):
@@ -737,9 +737,7 @@ if __name__ == "__main__":
             )
 
         if clean:
-            # logging.warning("skipping clean because its commented")
-            pass
-            # os.remove(server_filepath)
+            os.remove(server_filepath)
 
         return str(img_id)
 

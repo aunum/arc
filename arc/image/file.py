@@ -25,6 +25,10 @@ class ContainerFile:
     def run(self, cmd: str) -> None:
         statement = f"RUN {cmd}"
         self._statements.append(statement)
+    
+    def shell(self, cmd: List[str]):
+        statement = f"SHELL {json.dumps(cmd)}"
+        self._statements.append(statement)
 
     def cmd(self, cmd: List[str]) -> None:
         statement = f"CMD {json.dumps(cmd)}"
@@ -104,3 +108,7 @@ def write_containerfile(c: ContainerFile) -> str:
     with open(dockerfile_path, "w") as f:
         f.write(str(c))
     return dockerfile_path
+
+
+def delete_containerfile() -> None:
+    os.remove(containerfile_path())

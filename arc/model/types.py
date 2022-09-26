@@ -1056,8 +1056,7 @@ if __name__ == "__main__":
                 dev_dependencies=dev_dependencies,
             )
         if clean:
-            pass
-            # os.remove(server_filepath)
+            os.remove(server_filepath)
 
         return str(img_id)
 

@@ -369,7 +369,7 @@ class ClassDataReport(EvalReport):
         """
 
         if repository is None:
-            repository = Config().image_repository
+            repository = Config().image_repo
         artifact = URI.parse(self.model_uri)
         name = f"report-{artifact.name}-{self.timestamp}"
         uri = f"{repository}:{name}"

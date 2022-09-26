@@ -3,15 +3,18 @@ import os
 import logging
 import yaml
 import sys
+import subprocess
 
 from docker import APIClient
 import enlighten
+from docker_image import reference
 
-from arc.image.file import ContainerFile, write_containerfile, ARC_DOCKERFILE_NAME
+from arc.image.file import ContainerFile, write_containerfile, ARC_DOCKERFILE_NAME, delete_containerfile
 from arc.image.id import ImageID
 from arc.config import Config, RemoteSyncStrategy
 from arc.image.client import default_socket
 from arc.scm import SCM
+from arc.util.rootpath import detect, load_conda_yaml
 
 TOMLDict = Dict[str, Any]
 
@@ -50,16 +53,13 @@ def img_tag(strategy: RemoteSyncStrategy, scm: Optional[SCM] = None, tag_prefix:
 
 def img_id(
     strategy: RemoteSyncStrategy,
-    registry_url: Optional[str] = None,
-    repository: Optional[str] = None,
+    image_repo: Optional[str] = None,
     tag: Optional[str] = None,
     tag_prefix: Optional[str] = None,
     scm: Optional[SCM] = None,
 ) -> ImageID:
-    if repository is None:
-        repository = Config().image_repository
-        if repository is None:
-            raise ValueError("image_namespace not provided or found in pyproject.toml")
+    if image_repo is None:
+        image_repo = Config().image_repo
 
     if scm is None:
         scm = SCM()
@@ -67,14 +67,10 @@ def img_id(
     if tag is None:
         tag = img_tag(strategy, scm, tag_prefix=tag_prefix)
 
-    if registry_url is None:
-        # check in pyproject.toml
-        registry_url = Config().registry_url
+    ref = reference.Reference.parse(image_repo)
+    host, repo = ref.split_hostname()
 
-        if registry_url is None:
-            registry_url = "docker.io"
-
-    return ImageID(host=registry_url, repository=repository, tag=tag)
+    return ImageID(host=host, repository=repo, tag=tag)
 
 
 def build_containerfile(
@@ -103,15 +99,44 @@ def build_containerfile(
     if cfg is None:
         cfg = Config()
 
+    if sync_strategy is None:
+        sync_strategy = cfg.remote_sync_strategy
+
+    project_root = detect()
+    project_root = os.path.join(REPO_ROOT, scm.rel_project_path())
+
+    print("project root: ", project_root)
+    if project_root is None:
+        raise ValueError("could not find project root, looking for .git | requirements.txt" +
+                         " | environment.yml | pyproject.toml")
+
     container_file: Optional[ContainerFile] = None
     if scm.is_poetry_project():
         logging.info("building image for poetry project")
-        if sync_strategy is None:
-            sync_strategy = cfg.remote_sync_strategy
         if sync_strategy == RemoteSyncStrategy.IMAGE:
-            container_file = build_poetry_containerfile(scm.load_pyproject(), base_image, dev_dependencies)
+            container_file = build_poetry_containerfile(scm.load_pyproject(), project_root, base_image,
+                                                        dev_dependencies)
         elif sync_strategy == RemoteSyncStrategy.CONTAINER:
-            container_file = build_poetry_base_containerfile(scm.load_pyproject(), base_image, dev_dependencies)
+            container_file = build_poetry_base_containerfile(scm.load_pyproject(), project_root, base_image,
+                                                             dev_dependencies)
+        else:
+            raise SystemError("unknown sync strategy")
+    
+    elif scm.is_pip_project():
+        logging.info("building image for pip project")
+        if sync_strategy == RemoteSyncStrategy.IMAGE:
+            container_file = build_pip_containerfile(project_root, base_image)
+        elif sync_strategy == RemoteSyncStrategy.CONTAINER:
+            container_file = build_pip_base_containerfile(project_root, base_image)
+        else:
+            raise SystemError("unknown sync strategy")
+
+    elif scm.is_conda_project():
+        logging.info("building image for conda project")
+        if sync_strategy == RemoteSyncStrategy.IMAGE:
+            container_file = build_conda_containerfile(project_root, base_image)
+        elif sync_strategy == RemoteSyncStrategy.CONTAINER:
+            container_file = build_conda_base_containerfile(project_root, base_image)
         else:
             raise SystemError("unknown sync strategy")
 
@@ -124,10 +149,8 @@ def build_containerfile(
     return container_file
 
 
-def build_poetry_base_containerfile(
-    pyproject_dict: Dict[str, Any],
-    base_image: Optional[str] = None,
-    dev_dependencies: bool = False,
+def _add_repo_files(
+    container_file: ContainerFile,
     scm: Optional[SCM] = None,
 ) -> ContainerFile:
     """Build a Containerfile for a Poetry project
@@ -143,88 +166,6 @@ def build_poetry_base_containerfile(
     """
     if scm is None:
         scm = SCM()
-
-    # check for poetry keys
-    try:
-        dependencies = pyproject_dict["tool"]["poetry"]["dependencies"]
-    except KeyError:
-        raise ValueError("no poetry.tool.dependencies section found in pyproject.toml")
-
-    container_file = ContainerFile()
-
-    # find base image
-    if base_image is None:
-        try:
-            info = sys.version_info
-            container_file.from_(f"python:{info.major}.{info.minor}.{info.micro}")
-        except KeyError:
-            raise ValueError("no poetry.tool.dependencies.python found in pyproject.toml")
-    else:
-        container_file.from_(base_image)
-
-    # build image
-    # container_file.env("POETRY_HOME", "/opt/poetry")
-    # container_file.run("python3 -m venv $POETRY_HOME && $POETRY_HOME/bin/pip install poetry==1.2.0")
-    # container_file.run("git clone https://github.com/python-poetry/poetry /poetry")
-    # container_file.workdir("/poetry")
-    # container_file.env("VIRTUAL_ENV", "/poetry-env")
-    # container_file.env("PATH", "/poetry-env/bin:$POETRY_HOME/bin:$PATH")
-    # container_file.run("python3 -m venv $VIRTUAL_ENV && poetry install")
-
-    container_file.env("PYTHONUNBUFFERED", "1")
-    container_file.env("PYTHONDONTWRITEBYTECODE", "1")
-    container_file.env("PIP_NO_CACHE_DIR", "off")
-    container_file.env("PIP_DISABLE_PIP_VERSION_CHECK", "on")
-    container_file.env("POETRY_NO_INTERACTION", "1")
-    # container_file.env("POETRY_VIRTUALENVS_CREATE", "false")
-    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}")
-
-    # apt install -y libffi-dev
-    container_file.run("apt update && apt install -y watchdog")
-    container_file.run("pip install poetry==1.2.0 && poetry --version")
-    # container_file.run("pip uninstall -y setuptools && pip install setuptools")
-
-    container_file.workdir(REPO_ROOT)
-
-    container_file.copy("poetry.lock pyproject.toml", f"{REPO_ROOT}/")
-    # container_file.run("poetry run python -m pip install --upgrade setuptools")
-
-    if dev_dependencies:
-        container_file.run("poetry install --no-ansi")
-    else:
-        container_file.run("poetry install --no-ansi --no-dev")
-
-    # NOTE: there is likely a better way of doing this; copying the .git directory
-    # with the tar sync was causing errors, and it is needed for the algorithms to
-    # work currently
-    container_file.copy(".git", f"{REPO_ROOT}/.git/")
-
-    container_file.expose(DEFAULT_PORT)
-
-    return container_file
-
-
-def build_poetry_containerfile(
-    pyproject_dict: Dict[str, Any],
-    base_image: Optional[str] = None,
-    dev_dependencies: bool = False,
-    scm: Optional[SCM] = None,
-) -> ContainerFile:
-    """Build a Containerfile for a Poetry project
-
-    Args:
-        pyproject_dict (Dict[str, Any]): a parsed pyproject file
-        base_image (str, optional): base image to use. Defaults to None.
-        dev_dependencies (bool, optional): whether to install dev dependencies. Defaults to False.
-        scm (SCM, optional): SCM to use. Defaults to None.
-
-    Returns:
-        ContainerFile: A Containerfile
-    """
-    if scm is None:
-        scm = SCM()
-
-    container_file = build_poetry_base_containerfile(pyproject_dict, base_image, dev_dependencies, scm)
 
     # Fun stuff here because we don't want to mess with .dockerignore, exclude patterns
     # will be added soon https://github.com/moby/moby/issues/15771
@@ -247,19 +188,214 @@ def build_poetry_containerfile(
     return container_file
 
 
-def build_conda_containerfile() -> ContainerFile:
-    raise NotImplementedError("not yet implemented!")
+def build_poetry_base_containerfile(
+    pyproject_dict: Dict[str, Any],
+    project_root: str,
+    base_image: Optional[str] = None,
+    dev_dependencies: bool = False,
+    scm: Optional[SCM] = None,
+) -> ContainerFile:
+    """Build a Containerfile for a Poetry project
+
+    Args:
+        pyproject_dict (Dict[str, Any]): a parsed pyproject file
+        project_root (str): Root of the python project
+        base_image (str, optional): base image to use. Defaults to None.
+        dev_dependencies (bool, optional): whether to install dev dependencies. Defaults to False.
+        scm (SCM, optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
+    if scm is None:
+        scm = SCM()
+
+    # check for poetry keys
+    try:
+        pyproject_dict["tool"]["poetry"]["dependencies"]
+    except KeyError:
+        raise ValueError("no poetry.tool.dependencies section found in pyproject.toml")
+
+    container_file = ContainerFile()
+
+    # find base image
+    if base_image is None:
+        try:
+            info = sys.version_info
+            container_file.from_(f"python:{info.major}.{info.minor}.{info.micro}")
+        except KeyError:
+            raise ValueError("could not determine python version")
+    else:
+        container_file.from_(base_image)
+
+    container_file.env("PYTHONUNBUFFERED", "1")
+    container_file.env("PYTHONDONTWRITEBYTECODE", "1")
+    container_file.env("PIP_NO_CACHE_DIR", "off")
+    container_file.env("PIP_DISABLE_PIP_VERSION_CHECK", "on")
+    container_file.env("POETRY_NO_INTERACTION", "1")
+    # container_file.env("POETRY_VIRTUALENVS_CREATE", "false")
+
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+
+    # apt install -y libffi-dev
+    container_file.run("apt update && apt install -y watchdog")
+    container_file.run("pip install poetry==1.2.0 && poetry --version")
+    # container_file.run("pip uninstall -y setuptools && pip install setuptools")
+
+    container_file.workdir(project_root)
+
+    container_file.copy("poetry.lock pyproject.toml", f"{project_root}/")
+    # container_file.run("poetry run python -m pip install --upgrade setuptools")
+
+    if dev_dependencies:
+        container_file.run("poetry install --no-ansi")
+    else:
+        container_file.run("poetry install --no-ansi --no-dev")
+
+    # NOTE: there is likely a better way of doing this; copying the .git directory
+    # with the tar sync was causing errors, and it is needed for the algorithms to
+    # work currently
+    container_file.copy(".git", f"{REPO_ROOT}/.git/")
+
+    container_file.expose(DEFAULT_PORT)
+
+    return container_file
 
 
-def build_pip_containerfile() -> ContainerFile:
-    raise NotImplementedError("not yet implemented!")
+def build_poetry_containerfile(
+    pyproject_dict: Dict[str, Any],
+    project_root: str,
+    base_image: Optional[str] = None,
+    dev_dependencies: bool = False,
+    scm: Optional[SCM] = None,
+) -> ContainerFile:
+    """Build a Containerfile for a Poetry project
+
+    Args:
+        pyproject_dict (Dict[str, Any]): a parsed pyproject file
+        project_root (str): Root of the python project
+        base_image (str, optional): base image to use. Defaults to None.
+        dev_dependencies (bool, optional): whether to install dev dependencies. Defaults to False.
+        scm (SCM, optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
+    if scm is None:
+        scm = SCM()
+
+    container_file = build_poetry_base_containerfile(pyproject_dict, project_root, base_image, dev_dependencies, scm)
+    container_file = _add_repo_files(container_file, scm)
+
+    return container_file
+
+
+def build_conda_base_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+    if scm is None:
+        scm = SCM()
+
+    container_file = ContainerFile()
+
+    # find base image
+    if base_image is None:
+        try:
+            out = subprocess.check_output(["conda", "--version"])
+            conda_ver = str(out).split(" ")
+            if len(conda_ver) != 2:
+                raise ValueError(f"could not determine conda version from: {conda_ver}")
+            img = f"continuumio/miniconda:{conda_ver[1]}"
+            logging.info(f"using base image: {img}")
+            container_file.from_(img)
+        except KeyError:
+            logging.warn("could not determine conda version, trying latest")
+            container_file.from_("continuumio/miniconda:latest")
+    else:
+        container_file.from_(base_image)
+
+    # this needs to be project_root
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+
+    container_file.run("apt update && apt install -y watchdog")
+
+    container_file.workdir(project_root)
+    container_file.copy("environment.yml", f"{project_root}/")
+
+    conda_yaml = load_conda_yaml()
+    if "name" not in conda_yaml:
+        raise ValueError("cannot find 'name' in environment.yml")
+    
+    env_name = conda_yaml["name"]
+
+    # https://stackoverflow.com/questions/55123637/activate-conda-environment-in-docker
+    container_file.shell(["conda", "run", "--no-capture-output", "-n", env_name, "/bin/bash", "-c"])
+
+    # NOTE: there is likely a better way of doing this; copying the .git directory
+    # with the tar sync was causing errors, and it is needed for the algorithms to
+    # work currently
+    container_file.copy(".git", f"{REPO_ROOT}/.git/")
+
+    container_file.expose(DEFAULT_PORT)
+
+    return container_file
+
+
+def build_conda_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+    container_file = build_conda_base_containerfile(project_root, base_image, scm)
+    container_file = _add_repo_files(container_file, scm)
+    return container_file
+
+
+def build_pip_base_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+    if scm is None:
+        scm = SCM()
+
+    container_file = ContainerFile()
+
+    # find base image
+    if base_image is None:
+        try:
+            info = sys.version_info
+            container_file.from_(f"python:{info.major}.{info.minor}.{info.micro}")
+        except KeyError:
+            raise ValueError("could not determine python version")
+    else:
+        container_file.from_(base_image)
+
+    container_file.env("PYTHONUNBUFFERED", "1")
+    container_file.env("PYTHONDONTWRITEBYTECODE", "1")
+    container_file.env("PIP_NO_CACHE_DIR", "off")
+    container_file.env("PIP_DISABLE_PIP_VERSION_CHECK", "on")
+
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+
+    container_file.run("apt update && apt install -y watchdog")
+
+    container_file.workdir(project_root)
+
+    container_file.copy("requirements.txt", f"{project_root}/")
+
+    container_file.run("python -m pip install -r requirements.txt")
+
+    # NOTE: there is likely a better way of doing this; copying the .git directory
+    # with the tar sync was causing errors, and it is needed for the algorithms to
+    # work currently
+    container_file.copy(".git", f"{REPO_ROOT}/.git/")
+
+    container_file.expose(DEFAULT_PORT)
+
+    return container_file
+
+
+def build_pip_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+    container_file = build_pip_base_containerfile(project_root, base_image, scm)
+    container_file = _add_repo_files(container_file, scm)
+    return container_file
 
 
 def build_img(
     c: ContainerFile,
     sync_strategy: RemoteSyncStrategy,
-    registry_url: Optional[str] = None,
-    repository: Optional[str] = None,
+    image_repo: Optional[str] = None,
     tag: Optional[str] = None,
     docker_socket: Optional[str] = None,
     scm: Optional[SCM] = None,
@@ -270,8 +406,7 @@ def build_img(
 
     Args:
         c (ContainerFile): Containerfile to use
-        registry_url (str, optional): registry URL. Defaults to None.
-        repository (str, optional): repository name. Defaults to None.
+        image_repo (str, optional): repository name. Defaults to None.
         tag (str, optional): tag for image. Defaults to None.
         docker_socket (str, optional): docker socket to use. Defaults to None.
         scm (SCM, optional): SCM to use. Defaults to None.
@@ -293,7 +428,7 @@ def build_img(
         scm = SCM()
 
     image_id = img_id(
-        sync_strategy, registry_url=registry_url, repository=repository, tag=tag, scm=scm, tag_prefix=tag_prefix
+        sync_strategy, image_repo=image_repo, tag=tag, scm=scm, tag_prefix=tag_prefix
     )
 
     logging.info(f"building image using id '{image_id}'")
@@ -313,6 +448,7 @@ def build_img(
         except Exception:
             print(yaml.dump(line))
 
+    delete_containerfile()
     return image_id
 
 
@@ -452,6 +588,20 @@ def img_command(container_path: str, scm: Optional[SCM] = None) -> List[str]:
     command = ["python", container_path]
     if scm.is_poetry_project():
         command = ["poetry", "run", "python", str(container_path)]
+
+    elif scm.is_pip_project():
+        command = ["python", str(container_path)]
+
+    elif scm.is_conda_project():
+        conda_yaml = load_conda_yaml()
+        if "name" not in conda_yaml:
+            raise ValueError("cannot find 'name' in environment.yml")
+        
+        env_name = conda_yaml["name"]
+        command = ["conda", "run", "--no-capture-output", "-n", env_name, "python", str(container_path)]
+
+    else:
+        raise ValueError("project type unknown")
 
     return command
 

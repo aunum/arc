@@ -14,6 +14,8 @@ from arc.model.types import ModelPhase, MultiClassImageClassifier
 from arc.model.metrics import Metrics
 from arc.model.opts import MultiClassClassificationLossOpts, OptimizerOpts
 from arc.model.trainer import Trainer
+from arc.util.rootpath import detect
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -156,38 +158,40 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
 
 
 if __name__ == "__main__":
-    print("creating model in k8s...")
-    model = ConvMultiClassImageClassifier.develop()
-    print("model info: ", model.info())
 
-    model.validate()
+    print("current working dir: ", os.getcwd())
+    print("rootpath: ", detect())
 
-    print("creating job in k8s...")
-    job = ClassifyDigitsJob.develop()
+    # print("creating model in k8s...")
+    # model = ConvMultiClassImageClassifier.develop()
+    # print("model info: ", model.info())
 
-    print("sampling job")
-    sample_img, sample_class = job.sample(1)
-    print("sample classes: ", sample_class)
+    # print("creating job in k8s...")
+    # job = ClassifyDigitsJob.develop()
 
-    print("compiling model...")
-    model.compile(sample_img, sample_class)
+    # print("sampling job")
+    # sample_img, sample_class = job.sample(1)
+    # print("sample classes: ", sample_class)
 
-    max = 0
-    for x, y in job.stream():
-        metrics = model.fit(x, y)
-        print("metrics: ", metrics)
-        max += 1
-        if max > 50:
-            break
+    # print("compiling model...")
+    # model.compile(sample_img, sample_class)
 
-    print("predicting...")
-    sample_img, sample_class = job.sample(12)
-    y_pred = model.predict(sample_img)
-    print("y pred: ", y_pred)
+    # max = 0
+    # for x, y in job.stream():
+    #     metrics = model.fit(x, y)
+    #     print("metrics: ", metrics)
+    #     max += 1
+    #     if max > 50:
+    #         break
 
-    print("evaluting...")
-    report = job.evaluate(model)
-    print(str(report))
+    # print("predicting...")
+    # sample_img, sample_class = job.sample(12)
+    # y_pred = model.predict(sample_img)
+    # print("y pred: ", y_pred)
+
+    # print("evaluting...")
+    # report = job.evaluate(model)
+    # print(str(report))
 
     # trainer = Trainer[ImageData, ClassData].develop()
 

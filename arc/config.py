@@ -1,13 +1,9 @@
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
 import os
 from enum import Enum
-
-import git
-import tomli
 from typing import Dict, Protocol
 
-from arc.scm import SCM
+from arc.util.rootpath import is_pyproject, has_arc_yaml, load_arc_yaml, load_pyproject
 
 
 class Opts(Protocol):
@@ -26,73 +22,128 @@ class RemoteSyncStrategy(str, Enum):
     """Copy the file changes directly into a running container"""
 
 
-@dataclass
 class Config:
-    """Configuration for Arc"""
+    """General configuration for Arc"""
 
-    registry_url: Optional[str] = None
-    image_repository: Optional[str] = None
-    docker_socket: Optional[str] = None
-    kube_namespace: str = field(default_factory=str)
-    remote_sync_strategy: Optional[RemoteSyncStrategy] = None
+    image_repo: str
+    docker_socket: str
+    kube_namespace: str
+    remote_sync_strategy: RemoteSyncStrategy
 
-    def apply_defaults(self):
+    _pyproject_dict: Optional[Dict[str, Any]] = None
+    _arc_yaml: Optional[Dict[str, Any]] = None
+
+    def __init__(
+            self,
+            image_repo: Optional[str] = None,
+            docker_socket: Optional[str] = None,
+            kube_namespace: Optional[str] = None,
+            remote_sync_strategy: Optional[RemoteSyncStrategy] = None
+            ):
+
+        if is_pyproject():
+            self._pyproject_dict = load_pyproject()
+
+        if has_arc_yaml():
+            self._arc_yaml = load_arc_yaml()
+            
+        if image_repo is None:
+            self.image_repo = self.get_image_repo()
+        else:
+            self.image_repo = image_repo
+        if self.image_repo == "":
+            raise ValueError("could not find a configured registry url, please set either $ARC_REGISTRY_URL ," +
+                             "add `tool.arc.registry_url` to pyproject.toml , or add `registry_url` to arc.yaml")
+        
+        if docker_socket is None:
+            self.docker_socket = self.get_docker_socket()
+        else:
+            self.docker_socket = docker_socket
+        if self.docker_socket == "":
+            if os.name == "nt":
+                raise ValueError("problem loading docker socket: windows not yet supported")
+
+            self.docker_socket = "unix://var/run/docker.sock"
+
+        if kube_namespace is None:
+            self.kube_namespace = self.get_kube_namespace()
+        else:
+            self.kube_namespace = kube_namespace
         if self.kube_namespace == "":
-            repo_name = SCM().name()
-            self.kube_namespace = repo_name.lower()
+            self.kube_namespace = "arc"
 
-        if self.remote_sync_strategy is None:
-            self.remote_sync_strategy = RemoteSyncStrategy.CONTAINER
+        if remote_sync_strategy is None:
+            self.remote_sync_strategy = self.get_remote_sync_strategy()
+        else:
+            self.remote_sync_strategy = remote_sync_strategy
 
-    def load_pyproject(self):
-        repo = git.Repo(".", search_parent_directories=True)
-        root_repo_path = repo.working_tree_dir
-        pyproject_path = os.path.join(str(root_repo_path), "pyproject.toml")
+    def get_image_repo(self) -> str:
 
-        if os.path.exists(pyproject_path):
-            with open(pyproject_path, "rb") as f:
-                pyproject_dict = tomli.load(f)
+        env = os.getenv("ARC_IMAGE_REPO")
+        if env is not None:
+            return env
 
-                try:
-                    pyproject_dict["tool"]["arc"]
-                except KeyError:
-                    return
+        if self._pyproject_dict is not None:
+            try:
+                return self._pyproject_dict["tool"]["arc"]["image_repo"]
+            except KeyError:
+                pass
 
-                try:
-                    registry_url = pyproject_dict["tool"]["arc"]["registry_url"]
-                    if self.registry_url is None:
-                        self.registry_url = registry_url
-                except KeyError:
-                    pass
+        if self._arc_yaml is not None:
+            if ["image_repo"] in self._arc_yaml:
+                return self._arc_yaml["image_repo"]
 
-                try:
-                    image_repository = pyproject_dict["tool"]["arc"]["image_repository"]
-                    if self.image_repository is None:
-                        self.image_repository = image_repository
-                except KeyError:
-                    pass
+        return ""
 
-                try:
-                    docker_socket = pyproject_dict["tool"]["arc"]["docker_socket"]
-                    if self.docker_socket is None:
-                        self.docker_socket = docker_socket
-                except KeyError:
-                    pass
+    def get_docker_socket(self) -> str:
+        env = os.getenv("ARC_DOCKER_SOCKET")
+        if env is not None:
+            return env
 
-                try:
-                    kube_namespace = pyproject_dict["tool"]["arc"]["kube_namespace"]
-                    if self.kube_namespace is None:
-                        self.kube_namespace = kube_namespace
-                except KeyError:
-                    pass
+        if self._pyproject_dict is not None:
+            try:
+                return self._pyproject_dict["tool"]["arc"]["docker_socket"]
+            except KeyError:
+                pass
 
-                try:
-                    remote_sync_strategy = pyproject_dict["tool"]["arc"]["remote_sync_strategy"]
-                    if self.remote_sync_strategy is None:
-                        self.remote_sync_strategy = RemoteSyncStrategy[remote_sync_strategy]
-                except KeyError:
-                    pass
+        if self._arc_yaml is not None:
+            if ["docker_socket"] in self._arc_yaml:
+                return self._arc_yaml["docker_socket"]
 
-    def __post_init__(self):
-        self.load_pyproject()
-        self.apply_defaults()
+        return ""
+
+    def get_kube_namespace(self) -> str:
+        env = os.getenv("ARC_KUBE_NAMESPACE")
+        if env is not None:
+            return env
+
+        if self._pyproject_dict is not None:
+            try:
+                return self._pyproject_dict["tool"]["arc"]["kube_namespace"]
+            except KeyError:
+                pass
+
+        if self._arc_yaml is not None:
+            if ["kube_namespace"] in self._arc_yaml:
+                return self._arc_yaml["kube_naemspace"]
+
+        return ""
+
+    def get_remote_sync_strategy(self) -> RemoteSyncStrategy:
+        env = os.getenv("ARC_REMOTE_SYNC_STRATEGY")
+        if env is not None:
+            return RemoteSyncStrategy(env)
+
+        if self._pyproject_dict is not None:
+            try:
+                sync = self._pyproject_dict["tool"]["arc"]["remote_sync_strategy"]
+                return RemoteSyncStrategy(sync)
+            except KeyError:
+                pass
+
+        if self._arc_yaml is not None:
+            if ["remote_sync_strategy"] in self._arc_yaml:
+                return RemoteSyncStrategy(self._arc_yaml["remote_sync_strategy"])
+
+        return RemoteSyncStrategy.CONTAINER
+

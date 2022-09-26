@@ -1,4 +1,4 @@
-from typing import Optional, ClassVar, TypeVar, Tuple, List, Generic, Dict
+from typing import Optional, ClassVar, TypeVar, Tuple, List, Generic, Dict, Union
 
 from abc import ABC, abstractmethod
 
@@ -31,5 +31,5 @@ class CategoricalTunable(Generic[T]):
 
 class TunableMixin(ABC):
     @abstractmethod
-    def tunables(self) -> List[NumericTunable | CategoricalTunable]:
+    def tunables(self) -> List[Union[NumericTunable, CategoricalTunable]]:
         pass

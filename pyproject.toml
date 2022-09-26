@@ -1,7 +1,7 @@
 [tool.poetry]
 # https://github.com/python-poetry/poetry/issues/705
 name = "arc-ai"
-version = "0.0.1"
+version = "0.0.2"
 description = "Economies of models"
 packages = [{ include = "arc" }]
 authors = ["Patrick Barker <patrickbarkerco@gmail.com>"]
@@ -38,8 +38,12 @@ uvicorn = { extras = ["standard"], version = "^0.18.2" }
 blobz = "0.0.13"
 kubernetes = "24.2.0"
 typeguard = "^2.13.3"
+types-six = "^1.16.19"
+types-PyYAML = "^6.0.11"
 
 [tool.poetry.dev-dependencies]
+tensorflow = "^2.9.1"
+
 black = "^21.12b0"
 flake8 = "^4.0.1"
 isort = "^5.10.1"
@@ -49,10 +53,6 @@ ipykernel = "^6.7.0"
 jupyter = "^1.0.0"
 pytest = "^6.2.5"
 python-mnist = "^0.7"
-tensorflow = "^2.9.1"
-
-[tool.poetry.group.dev.dependencies]
-mypy = "^0.971"
 
 [tool.arc]
 registry_url = "docker.io"

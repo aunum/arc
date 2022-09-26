@@ -1,0 +1,4 @@
+arc-ai==0.0.2
+cloudpickle
+tensorflow
+python-mnist

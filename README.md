@@ -1,6 +1,6 @@
 ![logo](./static/logo.png "Logo")
 
-Arc is a declarative, minimalist, automation-forward machine learning platform. It aims to commoditize models by standardizing their IO, making it easy to consume models from _any_ source using your language of choice.   
+Arc is a declarative, minimalist, automation-forward machine learning toolkit. It aims to commoditize models by standardizing their IO into a common protocol, making it easy to consume models from _any_ source using your language of choice.   
 
 Arc embraces the multiplicity of models, allowing for the training and inference of many models from any framework in a distributed manor. Arc aims to scale models through a hetergeneous mixture of experts.
 
@@ -8,7 +8,7 @@ Arc makes the machine learning development lifecycle lightweight and ergonomic. 
 
 Arc makes use of its standardization patterns to provide rich automation around the selection, tuning, and hardening of models.
 
--- _Arc is pre-alpha, things can and will break, feel free to open issues and requests_ --
+-- _Arc is pre-alpha, things can and will break, feel free to open issues and pull requests_ --
 
 ## Tenants
 
@@ -27,13 +27,16 @@ Arc makes use of its standardization patterns to provide rich automation around 
 pip install arc-ai
 ```
 
-Arc only requires a working `KUBECONFIG` and an image repository. Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :)    
+_Python >= 3.10_
+_Kubernetes >= 1.22.0_
+
+Arc only requires a working `KUBECONFIG` and an image repository (see [artifacts.md](./docs/artifacts.md)). Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :slightly_smiling_face:  
 
 If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally
 
 ## Quick Start
 
-See the [MNIST example](examples/mnist/classifier.py) for the full example
+See the [MNIST example](examples/mnist/keras/classifier.py) for the full example
 
 ```python
 # Run a local model on Kubernetes, hot reloading code changes
@@ -66,6 +69,7 @@ report = job.evaluate(model)
 * [Jobs](./docs/jobs.md)
 * [Models](./docs/models.md)
 * [Trainer](./docs/trainer.md)
+* [Artifacts](./docs/artifacts.md)
 * [Functions](./docs/functions.md)
 * [Finder](./docs/finder.md)
 * [Predictor](./docs/predictor.md)
@@ -79,14 +83,18 @@ These primitives roughly map to roles:
 ## Roadmap
 
 ### Core
+- [x] Model interface
+- [x] Job interface
 - [x] Remote model saving
 - [x] Trainer interface
+- [x] Poetry build environments
+- [x] Conda build environments
+- [x] Pip build environments
 - [ ] Finder interface
 - [ ] Predictor interface
+- [ ] Router interface
 - [ ] Notebook support
-- [ ] Conda build environments
-- [ ] Pip build environments
-- [ ] Whylogs integration
+- [ ] Whylogs integration:q
 - [ ] Kubernetes provider
 - [ ] Msgpack encoding
 - [ ] Monetization

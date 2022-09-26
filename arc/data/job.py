@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, make_dataclass, is_dataclass
-from typing import List, Iterator, Tuple, Dict, Type, Protocol
+from typing import List, Iterator, Tuple, Dict, Type, Protocol, Union, Any
 import logging
 import inspect
 import typing
@@ -300,10 +300,10 @@ class SupervisedJobClient(Generic[X, Y]):
             pod_name = pod_name[:62]
 
         if params is not None:
-            cfg = V1ConfigMap(
+            cfgmap = V1ConfigMap(
                 metadata=V1ObjectMeta(name=pod_name, namespace=namespace), data={"cfg": json.dumps(params)}
             )
-            core_v1_api.create_namespaced_config_map(namespace, cfg)
+            core_v1_api.create_namespaced_config_map(namespace, cfgmap)
 
         logging.info("ensuring cluster auth resources...")
         auth_resources = ensure_cluster_auth_resources(core_v1_api, rbac_v1_api, docker_socket, namespace, cfg)
@@ -437,6 +437,8 @@ class SupervisedJobClient(Generic[X, Y]):
         x_cls: Type[X] = args[0]
         y_cls: Type[Y] = args[1]
 
+        raise NotImplementedError()
+
     def info(self) -> Dict[str, Any]:
         """Info about the server
 
@@ -536,7 +538,7 @@ class SupervisedJobClient(Generic[X, Y]):
 
     def evaluate(
         self,
-        model: SupervisedModel[X, Y] | SupervisedModelClient[X, Y],
+        model: Union[SupervisedModel[X, Y], SupervisedModelClient[X, Y]],
         batch_size: int = DEFAULT_BATCH_SIZE,
         store: bool = True,
     ) -> EvalReport:
@@ -709,7 +711,7 @@ class SupervisedJob(Generic[X, Y], Job):
 
     def evaluate(
         self,
-        model: SupervisedModel[X, Y] | SupervisedModelClient[X, Y],
+        model: Union[SupervisedModel[X, Y], SupervisedModelClient[X, Y]],
         batch_size: int = DEFAULT_BATCH_SIZE,
         store: bool = True,
     ) -> EvalReport:
@@ -1116,9 +1118,7 @@ if __name__ == "__main__":
             )
 
         if clean:
-            # logging.warning("skipping clean because its commented")
-            pass
-            # os.remove(server_filepath)
+            os.remove(server_filepath)
 
         return str(img_id)
 
@@ -1202,7 +1202,7 @@ if __name__ == "__main__":
         if repositories is None:
             if cfg is None:
                 cfg = Config()
-            repositories = [f"{cfg.registry_url}/{cfg.image_repository}"]
+            repositories = [cfg.image_repo]
 
         if repositories is None:
             # TODO: use current repository

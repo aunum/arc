@@ -1,0 +1,7 @@
+name: imdb
+channels:
+  - conda-forge
+  - huggingface
+dependencies:
+  - python >=3.8,<3.9
+  - transformers

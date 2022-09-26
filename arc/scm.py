@@ -8,7 +8,7 @@ import inspect
 
 import git
 import tomli
-import rootpath
+import arc.util.rootpath as rootpath
 
 DEFAULT_ARCHIVE_BASE_DIR = "./.arc/archive"
 SHORT_HASH_LENGTH = 7
@@ -45,41 +45,25 @@ class SCM:
         self.git_repo = git.Repo(".", search_parent_directories=True)
         self.archive_base_dir = archive_base_dir
 
-    def _pyproject_path(self) -> str:
-        root_repo_path = self.git_repo.working_tree_dir
-        pyproject_path = os.path.join(str(root_repo_path), "pyproject.toml")
-        return pyproject_path
-
-    def is_pyproject(self) -> bool:
-        """Is this repo a pyproject
-
-        Returns:
-            bool: whether this project is a pyproject
-        """
-
-        if os.path.exists(self._pyproject_path()):
-            return True
-
-        return False
-
     def load_pyproject(self) -> Dict[str, Any]:
         """Load the pyproject file as a dictionary
 
         Returns:
-            bool: [description]
+            Dict[str, Any]: A dictionary of the pyproject
         """
-        with open(self._pyproject_path(), "rb") as f:
+        path = os.path.join(rootpath.detect(), "pyproject.toml")
+        with open(path, "rb") as f:
             pyproject_dict = tomli.load(f)
             return pyproject_dict
 
     def is_poetry_project(self) -> bool:
-        """Tells whether the current project is a poetry project
+        """Checks whether the project is a poetry project
 
         Returns:
-            bool: whether this repo is a poetry project
+            bool: Whether the project is a poetry project
         """
 
-        if not self.is_pyproject():
+        if not rootpath.is_pyproject():
             return False
 
         pyproject_dict = self.load_pyproject()
@@ -94,10 +78,32 @@ class SCM:
         return is_poetry_project
 
     def is_pip_project(self) -> bool:
-        raise NotImplementedError("not yet implemented")
+        """Checks if the project is a pip project
+
+        Returns:
+            bool: Whether the project is a pip project
+        """
+        return rootpath.is_pip_project()
 
     def is_conda_project(self) -> bool:
-        raise NotImplementedError("not yet implemented")
+        """Checks whether the project is a conda project
+
+        Returns:
+            bool: Whether the project is a conda project
+        """
+        return rootpath.is_conda_project()
+
+    def rel_project_path(self) -> str:
+        """Project path relative to git repository
+
+        Returns:
+            str: Relative project path
+        """
+        rp = rootpath.detect()
+        if rp is None:
+            raise ValueError("could not detect rootpath")
+
+        return str(os.path.relpath(str(self.git_repo.working_dir), rp))
 
     def _dirty_sha(self) -> str:
         """Generate a hash of the repo for any uncommitted or untracked changes

@@ -7,8 +7,12 @@ An example convolutional image classifier for MNIST
 `$KUBECONFIG` pointing to a working cluster    
 `~/.docker/config.json` granting authentication to an image repository   
 
+```
+python -m pip install -r requirements.txt
+```
+
 ## Run
 
 ```
-poetry run classifier.py
+python classifier.py
 ```
