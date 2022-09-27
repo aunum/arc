@@ -15,10 +15,9 @@ import typing
 import cloudpickle as pickle
 from dataclasses_jsonschema import JsonSchemaMixin, T
 from simple_parsing.helpers import Serializable
-from kubernetes import client, config
+from kubernetes import config
 from kubernetes.stream import portforward
 from kubernetes.client.models import (
-    V1EphemeralContainer,
     V1VolumeMount,
     V1Pod,
     V1PodSpec,
@@ -41,7 +40,7 @@ from kubernetes.client.models import (
     V1ContainerStateTerminated,
     V1ContainerStateWaiting,
 )
-from kubernetes.client import CoreV1Api, V1PodSpec, V1ObjectMeta, RbacAuthorizationV1Api
+from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
 from urllib import request
@@ -69,13 +68,12 @@ from arc.scm import SCM
 from arc.image.registry import get_img_labels, get_repo_tags
 from arc.data.encoding import ShapeEncoder
 from arc.kube.env import is_k8s_proc
-from arc.kube.auth_util import ensure_cluster_auth_resources, get_dockercfg_secret_name
-from arc.config import Opts
+from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.image.build import img_id
 
 X = TypeVar("X", bound="Data")
 Y = TypeVar("Y", bound="Data")
-O = TypeVar("O", bound="Opts")
+O = TypeVar("O", bound="Opts")  # noqa: E741
 M = TypeVar("M", bound="Model")
 
 
@@ -160,7 +158,8 @@ class Model(ABC, APIUtil):
                 fin_params.append((param, sig.parameters[param].annotation))
             else:
                 fin_params.append(
-                    (param, sig.parameters[param].annotation, field(default=sig.parameters[param].default))  # type: ignore
+                    (param, sig.parameters[param].annotation, 
+                     field(default=sig.parameters[param].default))  # type: ignore
                 )
 
         return make_dataclass(cls.__name__ + "Opts", fin_params, bases=(Serializable, JsonSchemaMixin))
@@ -338,7 +337,8 @@ class SupervisedModelClient(Generic[X, Y], Client):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with the files to tell if its running?
+                        # it will just return the original verion, how do we sync the verion with 
+                        # the files to tell if its running?
                         # TODO!
                         logging.info(self.info())
                     logging.info("returning")
@@ -485,7 +485,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
     def validate(self) -> None:
         """Validate the client and server schema are compatible"""
 
-        orig = get_orig_class(self)
+        raise NotImplementedError()
 
     def info(self) -> Dict[str, Any]:
         """Info about the server
@@ -565,7 +565,8 @@ class SupervisedModelClient(Generic[X, Y], Client):
 
     @classmethod
     def find(cls) -> List["SupervisedModelClient"]:
-        """Find all the models that could be deployed (or are running) that we could find, should show with the metrics"""
+        """Find all the models that could be deployed (or are running) that we could find, 
+        should show with the metrics"""
         pass
 
     def save(
@@ -593,9 +594,9 @@ class SupervisedModelClient(Generic[X, Y], Client):
         body = resp.read().decode("utf-8")
 
         # should get the version of the model from the model
-        repository, tag = parse_repository_tag(self.uri)
-        registry, repo_name = resolve_repository_name(repository)
-        docker_secret = get_dockercfg_secret_name()
+        _, tag = parse_repository_tag(self.uri)
+        # registry, repo_name = resolve_repository_name(repository)
+        # docker_secret = get_dockercfg_secret_name()
 
         cls_name = tag.split("-")[1]
 
@@ -629,8 +630,8 @@ class SupervisedModelClient(Generic[X, Y], Client):
                         "args": [
                             f"--context={REPO_ROOT}",
                             f"--destination={uri}",
-                            f"--dockerfile=Dockerfile.arc",
-                            "--ignore-path=/product_uuid",  # For kind https://github.com/GoogleContainerTools/kaniko/issues/2164
+                            "--dockerfile=Dockerfile.arc",
+                            "--ignore-path=/product_uuid",  # https://github.com/GoogleContainerTools/kaniko/issues/2164
                             f"--label={MODEL_BASE_NAME_LABEL}=SupervisedModel",
                             f"--label={MODEL_PHASE_LABEL}={info['phase']}",
                             f"--label={MODEL_NAME_LABEL}={info['name']}",
@@ -787,7 +788,7 @@ class SupervisedModel(Generic[X, Y], Model):
 
         # a = A()
 
-        # or this https://stackoverflow.com/questions/6307761/how-to-decorate-all-functions-of-a-class-without-typing-it-over-and-over-for-eac
+        # or this https://stackoverflow.com/questions/6307761/how-to-decorate-all-functions-of-a-class-without-typing-it-over-and-over-for-eac  # noqa: E501
 
         pass
 
@@ -833,7 +834,7 @@ class SupervisedModel(Generic[X, Y], Model):
 
         cls_file_path = Path(inspect.getfile(cls))
         cls_file = cls_file_path.stem
-        cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
+        # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
         server_file_name = f"{cls.__name__.lower()}_server.py"
 
         server_file = f"""
@@ -974,7 +975,7 @@ if __name__ == "__main__":
 
     logging.info("starting server version '{version}' on port: {SERVER_PORT}")
     uvicorn.run("__main__:app", host="0.0.0.0", port={SERVER_PORT}, log_level="debug", workers={num_workers}, reload=True, reload_dirs=pkgs.keys())
-        """
+        """  # noqa: E501
 
         class_file = inspect.getfile(cls)
         dir_path = os.path.dirname(os.path.realpath(class_file))
@@ -1119,7 +1120,7 @@ if __name__ == "__main__":
             raise ValueError("not yet supported")
 
         if "__orig_bases__" in cls.__dict__:
-            orig_bases = cls.__orig_bases__
+            orig_bases = cls.__orig_bases__  # type: ignore
             if len(orig_bases) == 0:
                 raise ValueError("No X/Y was provided to base class")
 
@@ -1131,7 +1132,7 @@ if __name__ == "__main__":
             raise ValueError("orig_base not found and is needed")
 
         img_id = cls.base_image(scm, clean, dev_dependencies)
-        return SupervisedModelClient[x_cls, y_cls](
+        return SupervisedModelClient[x_cls, y_cls](  # type: ignore
             uri=img_id, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, **kwargs
         )
 
@@ -1150,7 +1151,7 @@ if __name__ == "__main__":
             raise ValueError("not yet supported")
 
         if "__orig_bases__" in cls.__dict__:
-            orig_bases = cls.__orig_bases__
+            orig_bases = cls.__orig_bases__  # type: ignore
             if len(orig_bases) == 0:
                 raise ValueError("No X/Y was provided to base class")
 
@@ -1161,7 +1162,7 @@ if __name__ == "__main__":
         else:
             raise ValueError("orig_base not found and is needed")
 
-        return SupervisedModelClient[x_cls, y_cls](
+        return SupervisedModelClient[x_cls, y_cls](  # type: ignore
             model=cls, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, scm=scm, **kwargs
         )
 

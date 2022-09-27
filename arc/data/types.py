@@ -1,13 +1,10 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Generic, Iterator, List, Optional, Tuple, TypeVar, Dict, Type, NewType
-from arc.data.encoding import ShapeEncoder
+from typing import Any, Generic, List, Optional, TypeVar, Dict, Type
 from enum import Enum
 
 import numpy as np
-from dataclasses_jsonschema import JsonSchemaMixin, DEFAULT_SCHEMA_TYPE, JsonDict, SchemaType
-from dataclasses_jsonschema import JsonSchemaMixin, FieldEncoder
+from dataclasses_jsonschema import JsonSchemaMixin
 
 
 Y = TypeVar("Y", bound="YData")
@@ -88,7 +85,7 @@ class EvalReport(ABC):
         """Store the report as an artifact
 
         Args:
-            repository (Optional[str], optional): An optional reporitory to store the report. Defaults to the Config value.
+            repository (Optional[str], optional): Repository to store the report. Defaults to the Config value.
         """
         pass
 
@@ -140,7 +137,8 @@ class Data(ABC, JsonSchemaMixin):
         pass
 
     # NOTE: we need these methods because dataclasses_jsonschema doesn't currently support
-    # a way to transpose np.ndarray to a list https://github.com/s-knibbs/dataclasses-jsonschema#custom-validation-using-newtype
+    # a way to transpose np.ndarray to a 
+    # list https://github.com/s-knibbs/dataclasses-jsonschema#custom-validation-using-newtype
     # should maybe use https://github.com/jcrist/msgspec
     # https://github.com/florimondmanca/msgpack-asgi
     def repr_json(self) -> Dict[str, Any]:

@@ -14,7 +14,6 @@ from arc.model.types import ModelPhase, MultiClassImageClassifier
 from arc.model.metrics import Metrics
 from arc.model.opts import MultiClassClassificationLossOpts, OptimizerOpts
 from arc.model.trainer import Trainer
-from arc.util.rootpath import detect
 
 
 logging.basicConfig(level=logging.INFO)
@@ -181,7 +180,7 @@ if __name__ == "__main__":
         metrics = model.fit(x, y)
         print("metrics: ", metrics)
         max += 1
-        if max > 50:
+        if max > 100:
             break
 
     print("predicting...")

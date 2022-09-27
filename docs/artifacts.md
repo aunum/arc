@@ -1,6 +1,6 @@
 # Artifacts
 
-Arc stores all ML artifacts as [OCI Artifacts](https://github.com/opencontainers/artifacts), this enables a user to only have to provide an image registry for their storage, and allows for simple sharing of artifacts.
+Arc stores all ML artifacts as [OCI Artifacts](https://github.com/opencontainers/artifacts), this means a user only needs to provide an image registry for their storage, and allows for simple sharing of artifacts.
 
 Artifacts are stored with the following convention:
 
@@ -20,7 +20,7 @@ The classify digits job at v1:
 aunum/arc:job-classifydigits-v1
 ```
 
-The repository Arc uses for its artifacts must be configured using:
+The repository Arc uses for its artifacts _must_ be configured using either:
 * `$ARC_IMAGE_REPO` env var
 * `tool.arc.image_repo` in pyproject.toml
 * `image_repo` in arc.yaml

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, make_dataclass, is_dataclass
-from typing import List, Iterator, Tuple, Dict, Type, Protocol, Union, Any
+from typing import List, Iterator, Tuple, Dict, Type, Union, Any, Optional
 import logging
 import inspect
 import typing
@@ -10,23 +10,17 @@ import os
 import json
 import socket
 import time
-import cloudpickle as pickle
 import uuid
-from urllib import parse
-import time
+from urllib import parse, request
 
 from simple_parsing.helpers import Serializable
-from urllib import request, parse
-from kubernetes import client, config
+from kubernetes import config
 from kubernetes.stream import portforward
 from kubernetes.client.models import (
-    V1EphemeralContainer,
     V1VolumeMount,
     V1Pod,
     V1PodSpec,
     V1PodList,
-    V1Deployment,
-    V1DeploymentSpec,
     V1Container,
     V1ContainerPort,
     V1ConfigMap,
@@ -36,43 +30,40 @@ from kubernetes.client.models import (
     V1Probe,
     V1ExecAction,
     V1EnvVar,
-    V1Secret,
     V1KeyToPath,
 )
 from kubernetes.client import (
     CoreV1Api,
-    V1PodSpec,
     V1ObjectMeta,
-    V1Namespace,
     RbacAuthorizationV1Api,
 )
 from docker.utils.utils import parse_repository_tag
-from docker.utils.config import load_general_config
-from docker.auth import resolve_repository_name, load_config
+from docker.auth import resolve_repository_name
 from websocket import create_connection
-from dataclasses_jsonschema import JsonSchemaMixin, T
-from kubernetes.client.rest import ApiException
+from dataclasses_jsonschema import JsonSchemaMixin
 
-from arc.data.types import *
 from arc.data.types import XData, YData
-from ..kube.sync import copy_file_to_pod
-from arc.model.types import Model, SupervisedModel, SupervisedModelClient
-from arc.data.types import Score, SupervisedScore
+from arc.kube.sync import copy_file_to_pod
+from arc.model.types import SupervisedModel, SupervisedModelClient
+from arc.data.types import Score, EvalReport, BatchType
 from arc.scm import SCM
 from arc.image.client import default_socket
 from arc.image.build import REPO_ROOT, find_or_build_img, img_command
 from arc.config import Config, RemoteSyncStrategy
-from arc.image.registry import get_img_labels
-from arc.kube.pod_util import TYPE_LABEL, SYNC_SHA_LABEL, REPO_NAME_LABEL, ENV_SHA_LABEL, wait_for_pod_ready
-from arc.data.oci import URI
-from arc.data.refs import MODEL_REF_LABEL, OBJECT_TYPE_LABEL, JOB_REF_LABEL
-from arc.data.oci import URI
-from arc.image.registry import get_img_labels, get_img_refs, get_oci_client, get_repo_tags
-from arc.config import Config
+from arc.kube.pod_util import (
+    TYPE_LABEL,
+    SYNC_SHA_LABEL,
+    REPO_NAME_LABEL,
+    FUNC_NAME_LABEL,
+    ENV_SHA_LABEL,
+    REPO_SHA_LABEL,
+    SYNC_STRATEGY_LABEL,
+    wait_for_pod_ready,
+)
+from arc.image.registry import get_img_labels, get_repo_tags
 from arc.kube.env import is_k8s_proc
 from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.config import Opts
-from arc.kube.pod_util import REPO_SHA_LABEL, ENV_SHA_LABEL, REPO_NAME_LABEL, FUNC_NAME_LABEL, SYNC_STRATEGY_LABEL
 
 
 DEFAULT_BATCH_SIZE = 32
@@ -281,7 +272,8 @@ class SupervisedJobClient(Generic[X, Y]):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with the files to tell if its running?
+                        # it will just return the original verion, how do we sync the verion with 
+                        # the files to tell if its running?
                         # TODO!
                         logging.info(self.info())
                     logging.info("returning")
@@ -428,14 +420,14 @@ class SupervisedJobClient(Generic[X, Y]):
     def validate(self) -> None:
         """Validate the client and server schema are compatible"""
 
-        orig_bases = self.__orig_bases__
-        if len(orig_bases) == 0:
-            raise ValueError("No X/Y was provided to base class")
+        # orig_bases = self.__orig_bases__
+        # if len(orig_bases) == 0:
+        #     raise ValueError("No X/Y was provided to base class")
 
-        orig_class = orig_bases[0]
-        args = typing.get_args(orig_class)
-        x_cls: Type[X] = args[0]
-        y_cls: Type[Y] = args[1]
+        # orig_class = orig_bases[0]
+        # args = typing.get_args(orig_class)
+        # x_cls: Type[X] = args[0]
+        # y_cls: Type[Y] = args[1]
 
         raise NotImplementedError()
 
@@ -489,8 +481,7 @@ class SupervisedJobClient(Generic[X, Y]):
         )
         try:
             while True:
-                total_start = time.time()
-                op_code, data = ws.recv_data()
+                _, data = ws.recv_data()
                 if self.x_cls is None or self.y_cls is None:
                     print("self dict: ", self.__dict__)
                     args = typing.get_args(self.__orig_class__)
@@ -505,8 +496,6 @@ class SupervisedJobClient(Generic[X, Y]):
                 y = self.y_cls.load_dict(jdict["y"])
                 yield (x, y)
 
-                total_end = time.time()
-                # print("total loop time: ", total_end - total_start)
         except Exception as e:
             print("stream exception: ", e)
             raise e
@@ -653,7 +642,8 @@ class Job(ABC):
                 fin_params.append((param, sig.parameters[param].annotation))
             else:
                 fin_params.append(
-                    (param, sig.parameters[param].annotation, field(default=sig.parameters[param].default))  # type: ignore
+                    (param, sig.parameters[param].annotation,
+                     field(default=sig.parameters[param].default))  # type: ignore
                 )
 
         return make_dataclass(cls.__name__ + "Opts", fin_params, bases=(Serializable, JsonSchemaMixin))
@@ -789,7 +779,6 @@ class SupervisedJob(Generic[X, Y], Job):
 
         orig_class = orig_bases[0]
         args = typing.get_args(orig_class)
-        x_cls: Type[X] = args[0]
         y_cls: Type[Y] = args[1]
 
         hints = typing.get_type_hints(y_cls.score_cls().report)
@@ -842,7 +831,7 @@ class SupervisedJob(Generic[X, Y], Job):
 
         cls_file_path = Path(inspect.getfile(cls))
         cls_file = cls_file_path.stem
-        cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
+        # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
         server_file_name = f"{cls.__name__.lower()}_server.py"
 
         # https://github.com/abersheeran/rpc.py
@@ -1037,7 +1026,7 @@ if __name__ == "__main__":
 
     logging.info("starting server version '{version}' on port: {SERVER_PORT}")
     uvicorn.run("__main__:app", host="0.0.0.0", port={SERVER_PORT}, log_level="debug", workers={num_workers}, reload=True, reload_dirs=pkgs.keys())
-        """
+        """  # noqa: E501
 
         class_file = inspect.getfile(cls)
         dir_path = os.path.dirname(os.path.realpath(class_file))

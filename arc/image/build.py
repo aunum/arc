@@ -121,7 +121,7 @@ def build_containerfile(
                                                              dev_dependencies)
         else:
             raise SystemError("unknown sync strategy")
-    
+
     elif scm.is_pip_project():
         logging.info("building image for pip project")
         if sync_strategy == RemoteSyncStrategy.IMAGE:
@@ -323,7 +323,7 @@ def build_conda_base_containerfile(project_root: str, base_image: Optional[str] 
     conda_yaml = load_conda_yaml()
     if "name" not in conda_yaml:
         raise ValueError("cannot find 'name' in environment.yml")
-    
+
     env_name = conda_yaml["name"]
 
     # https://stackoverflow.com/questions/55123637/activate-conda-environment-in-docker
@@ -506,9 +506,6 @@ def push_img(id: ImageID, docker_socket: str = None) -> None:
     return
 
 
-## We need to be able to build an image from S3/OCI/GS
-
-
 def find_or_build_img(
     docker_socket: Optional[str] = None,
     scm: Optional[SCM] = None,
@@ -596,7 +593,7 @@ def img_command(container_path: str, scm: Optional[SCM] = None) -> List[str]:
         conda_yaml = load_conda_yaml()
         if "name" not in conda_yaml:
             raise ValueError("cannot find 'name' in environment.yml")
-        
+
         env_name = conda_yaml["name"]
         command = ["conda", "run", "--no-capture-output", "-n", env_name, "python", str(container_path)]
 

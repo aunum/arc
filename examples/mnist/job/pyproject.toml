@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "classify-digits-job"
+version = "0.1.0"
+description = "A job to classify digits"
+authors = ["Patrick Barker <patrickbarkerco@gmail.com>"]
+license = "Apache 2.0"
+readme = "README.md"
+packages = [{ include = "classify_digits_job" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,33 +1,21 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generic, Iterator, List, Optional, Tuple, TypeVar, Dict, Type, NewType
-from arc.data.encoding import ShapeEncoder
+from typing import Any, List, Optional, TypeVar, Dict, Type
 from enum import Enum
-import json
-
-import numpy as np
-from dataclasses_jsonschema import JsonSchemaMixin, DEFAULT_SCHEMA_TYPE, JsonDict, SchemaType
-from dataclasses_jsonschema import JsonSchemaMixin, FieldEncoder
-
-from arc.data.types import NDArray, Data, EvalReport, SupervisedScore
-
-from optparse import Option
-from typing import TypeVar, Generic, Optional, List, Type, Dict, Any
 from datetime import datetime
 import logging
 
-import numpy as np
 from sklearn.metrics import confusion_matrix
 from tabulate import tabulate
 import blobz
 import jsonpickle
+import numpy as np
 
-from arc.data.types import NDArray, Data
+from arc.data.types import NDArray, Data, EvalReport, SupervisedScore
 from arc.config import Config
 from arc.data.refs import MODEL_REF_LABEL, OBJECT_TYPE_LABEL, JOB_REF_LABEL
 from arc.data.oci import URI
-from arc.image.registry import get_img_labels, get_img_refs, get_oci_client, get_repo_tags
+from arc.image.registry import get_img_refs, get_repo_tags
 
 
 class ClassEncoding(str, Enum):
@@ -365,7 +353,7 @@ class ClassDataReport(EvalReport):
         """Store the report as an artifact
 
         Args:
-            repository (Optional[str], optional): An optional reporitory to store the report. Defaults to the Config value.
+            repository (Optional[str], optional): Repository to store the report. Defaults to the Config value.
         """
 
         if repository is None:

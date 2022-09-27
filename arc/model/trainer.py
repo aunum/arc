@@ -22,7 +22,7 @@ from kubernetes.client.models import (
     V1SecretVolumeSource,
     V1KeyToPath,
 )
-from kubernetes.client import CoreV1Api, V1PodSpec, V1ObjectMeta, RbacAuthorizationV1Api
+from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from urllib import request
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
@@ -31,7 +31,6 @@ from docker.auth import resolve_repository_name
 from arc.data.types import Data, EvalReport
 from arc.kube.sync import copy_file_to_pod
 from arc.image.client import default_socket
-from arc.model.util import get_orig_class
 from arc.image.build import REPO_ROOT, find_or_build_img, img_command
 from arc.kube.pod_util import (
     REPO_SHA_LABEL,
@@ -46,9 +45,7 @@ from arc.config import Config, RemoteSyncStrategy
 from arc.scm import SCM
 from arc.image.registry import get_img_labels, get_repo_tags
 from arc.kube.env import is_k8s_proc
-from arc.kube.auth_util import ensure_cluster_auth_resources, get_dockercfg_secret_name
-from arc.config import Opts
-from arc.image.build import img_id
+from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.data.job import SupervisedJob, SupervisedJobClient
 from arc.model.types import (
     SupervisedModel,
@@ -243,7 +240,8 @@ class TrainerClient(Generic[X, Y]):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with the files to tell if its running?
+                        # it will just return the original verion, how do we sync the verion with the 
+                        # files to tell if its running?
                         # TODO!
                         logging.info(self.info())
                     return
@@ -404,7 +402,7 @@ class TrainerClient(Generic[X, Y]):
 
         Returns:
             Dict[str, EvalReport]: A dictionary of model URI to report
-        """
+        """  # noqa: E501
 
         models: List[str] = []
         if isinstance(model, SupervisedModel):
@@ -485,9 +483,9 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
             job (SupervisedJob[X, Y] | SupervisedJobClient[X, Y] | str): Job to train for
             model (Optional[SupervisedModel[X, Y]  |  List[SupervisedModel[X, Y]] | SupervisedModelClient[X, Y] | List[SupervisedModelClient[X, Y]] | str | List[str]], optional): Models to train, if None, it will search for models. Defaults to None.
             max_parallel (int, optional): Maximum parallel models to train. Defaults to 10.
-            max_search (int, optional): Maximum number of models to search for if no models are provided. Defaults to 20.
+            max_search (int, optional): Maximum number of models to search for if none are provided. Defaults to 20.
             evaluate (bool, optional): Wether to evaluate. Defaults to True.
-        """
+        """  # noqa: E501
 
         args = get_args(self.__orig_class__)
         x_cls: Type[X] = args[0]
@@ -528,7 +526,7 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
         logging.info(f"sample classes: {sample_class}")
 
         for modl in models:
-            logging.info(f"compiling model: ", modl)
+            logging.info(f"compiling model: {modl}")
             modl.compile(sample_img, sample_class)
 
         logging.info(f"training {len(models)} models")
@@ -577,7 +575,7 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
 
         cls_file_path = Path(inspect.getfile(cls._generic.__origin__))
         cls_file = cls_file_path.stem
-        cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
+        # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
         server_file_name = f"{cls._generic.__origin__.__name__.lower()}_server.py"
         server_file = f"""
 import json
@@ -652,7 +650,7 @@ if __name__ == "__main__":
 
     logging.info("starting server version '{version}' on port: {SERVER_PORT}")
     uvicorn.run("__main__:app", host="0.0.0.0", port={SERVER_PORT}, log_level="debug", workers={num_workers}, reload=True, reload_dirs=pkgs.keys())
-        """
+        """  # noqa: E501
 
         class_file = inspect.getfile(cls._generic.__origin__)
         dir_path = os.path.dirname(os.path.realpath(class_file))
@@ -794,7 +792,7 @@ if __name__ == "__main__":
 
         Returns:
             TrainerClient[X, Y]: A trainer client
-        """
+        """  # noqa: E501
 
         if scm is None:
             scm = SCM()

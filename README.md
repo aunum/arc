@@ -27,16 +27,19 @@ Arc makes use of its standardization patterns to provide rich automation around 
 pip install arc-ai
 ```
 
-_Python >= 3.10_
-_Kubernetes >= 1.22.0_
+_Python >= 3.10; Kubernetes >= 1.22.0_
 
-Arc only requires a working `KUBECONFIG` and an image repository (see [artifacts.md](./docs/artifacts.md)). Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :slightly_smiling_face:  
+Arc only requires a working `KUBECONFIG` and an image repository (see [artifacts.md](./docs/artifacts.md)). 
 
-If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally
+Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :slightly_smiling_face:  
+
+If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally.
+
+Arc works with Poetry, Conda, and Pip for packaging.
 
 ## Quick Start
 
-See the [MNIST example](examples/mnist/keras/classifier.py) for the full example
+See the [MNIST example](examples/mnist/models/keras/classifier.py) for the full example
 
 ```python
 # Run a local model on Kubernetes, hot reloading code changes
