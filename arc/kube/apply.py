@@ -172,7 +172,7 @@ def invokeApi(k8sApi, action, obj, **args):
     # determine namespace to place the object in, supply default
     try:
         namespace = obj["metadata"]["namespace"]
-    except:
+    except Exception:
         namespace = "default"
 
     functionName = "%s_%s" % (action, kind)
@@ -183,7 +183,7 @@ def invokeApi(k8sApi, action, obj, **args):
         functionName = "%s_namespaced_%s" % (action, kind)
         function = getattr(k8sApi, functionName)
         args["namespace"] = namespace
-    if not "create" in functionName:
+    if "create" not in functionName:
         args["name"] = obj["metadata"]["name"]
     if "delete" in functionName:
         from kubernetes.client.models.v1_delete_options import V1DeleteOptions

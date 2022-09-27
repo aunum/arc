@@ -1,21 +1,16 @@
-from typing import Optional, Iterator, Dict
+from typing import Optional, Iterator, Tuple
 from pathlib import Path
 import logging
 import random
 
-from tableschema import Schema
-import pandas as pd
 import numpy as np
 from mnist import MNIST as MNISTLoader
 
 from arc.data.cache import ResourceCache
-from arc.data.cache_test import TEST_CACHE
-from arc.data.types import *
-from arc.data.job import SupervisedJob, DEFAULT_BATCH_SIZE, DEFAULT_EPOCH_SIZE, SupervisedJobClient
-from arc.model.types import Model, SupervisedModel
+from arc.data.types import BatchType
+from arc.data.job import SupervisedJob, DEFAULT_BATCH_SIZE
 from arc.data.shapes.classes import ClassData, ClassEncoding
 from arc.data.shapes.image import ImageData
-from arc.config import RemoteSyncStrategy
 
 
 class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
@@ -77,8 +72,8 @@ class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
         x, y = self._data_by_type(batch_type)
 
         for i in range(x.shape[0] // batch_size):
-            xb = x[batch_size * i : batch_size * (i + 1)]
-            yb = y[batch_size * i : batch_size * (i + 1)]
+            xb = x[batch_size * i: batch_size * (i + 1)]
+            yb = y[batch_size * i: batch_size * (i + 1)]
 
             # is this too costly computationally?
             yield ImageData(xb, 28, 28, 1, batch_size), ClassData(yb, 10, batch_size, ClassEncoding.CATEGORICAL)
@@ -86,7 +81,7 @@ class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
         indices = np.arange(len(x))
 
         if shuffle:
-            logging.info(f"shuffling data")
+            logging.info("shuffling data")
             np.random.shuffle(indices)
             # TODO: this may not be working
 
@@ -103,8 +98,8 @@ class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
         x, y = self.x_train, self.y_train
         i = random.randint(1, x.shape[0] // batch_size)
 
-        xb = x[batch_size * i : batch_size * (i + 1)]
-        yb = y[batch_size * i : batch_size * (i + 1)]
+        xb = x[batch_size * i: batch_size * (i + 1)]
+        yb = y[batch_size * i: batch_size * (i + 1)]
 
         return ImageData(xb, 28, 28, 1, batch_size), ClassData(yb, 10, batch_size, ClassEncoding.CATEGORICAL)
 

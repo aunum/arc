@@ -11,8 +11,3 @@ def test_scm():
     found = scm.find_archive()
 
     assert found == output_path
-
-    # scm.clean_archive_files()
-    # found = scm.find_archive()
-
-    # assert found == ""

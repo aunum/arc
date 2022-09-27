@@ -1,12 +1,7 @@
-from distutils import core
 import logging
 import time
-import xmlrpc.client
-import functools
 import inspect
 from typing import Callable, Optional
-import atexit
-import socket
 
 from kubernetes.client import (
     CoreV1Api,
@@ -16,14 +11,12 @@ from kubernetes.client import (
     V1ObjectMeta,
     V1ContainerPort,
     V1Probe,
-    V1Namespace,
     V1ExecAction,
 )
 from kubernetes.client.rest import ApiException
 from kubernetes import config
-from kubernetes.stream import portforward
 
-from arc.image.build import find_or_build_img, DEFAULT_PORT
+from arc.image.build import find_or_build_img
 from arc.scm import SCM
 from arc.kube.entrypoint import generate_entrypoint
 from arc.config import Config, RemoteSyncStrategy
@@ -129,7 +122,7 @@ def pod_ready(name: str, namespace: str, core_v1_api: Optional[CoreV1Api] = None
         else:
             for status in pod.status.container_statuses:
                 if not status.ready:
-                    logging.info(f"pod running but not ready")
+                    logging.info("pod running but not ready")
                     return False
             return True
 

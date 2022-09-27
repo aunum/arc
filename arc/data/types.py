@@ -137,10 +137,8 @@ class Data(ABC, JsonSchemaMixin):
         pass
 
     # NOTE: we need these methods because dataclasses_jsonschema doesn't currently support
-    # a way to transpose np.ndarray to a 
+    # a way to transpose np.ndarray to a
     # list https://github.com/s-knibbs/dataclasses-jsonschema#custom-validation-using-newtype
-    # should maybe use https://github.com/jcrist/msgspec
-    # https://github.com/florimondmanca/msgpack-asgi
     def repr_json(self) -> Dict[str, Any]:
         """Convert object to a JSON serializable dict
 

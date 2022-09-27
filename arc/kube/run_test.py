@@ -1,6 +1,4 @@
 from arc.kube.run import pod
-from arc.scm import SCM
-from pathlib import Path
 import pandas as pd
 import numpy as np
 

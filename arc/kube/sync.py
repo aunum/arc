@@ -3,7 +3,6 @@ from tempfile import TemporaryFile
 import tarfile
 import logging
 import os
-import time
 
 from kubernetes.client import (
     CoreV1Api,
@@ -254,8 +253,6 @@ def sync_repo_to_pod(
     if SYNC_SHA_LABEL in meta.labels:
         sync_sha = meta.labels[SYNC_SHA_LABEL]
         if sync_sha != scm.sha():
-            # logging.info("creating archive")
-            # path = scm.find_or_create_archive()
             logging.info("syncing files to pod")
             copy_file_to_pod(
                 scm.all_files(),
@@ -271,8 +268,6 @@ def sync_repo_to_pod(
             logging.info("sync sha is up to date")
     else:
         logging.info("syncing archive to pod for first time")
-        # logging.info("creating archive")
-        # path = scm.find_or_create_archive()
         logging.info("syncing files to pod")
         copy_file_to_pod(
             scm.all_files(),

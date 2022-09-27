@@ -12,12 +12,6 @@ import gzip
 import boto3
 from xdg import xdg_data_home
 
-# Local caching
-
-# Kubernetes caching
-
-# should this be hypercopy? hycp? how does this blend with caching?
-
 
 class ResourceCache:
     """Cache resources"""

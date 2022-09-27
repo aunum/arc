@@ -1,4 +1,4 @@
-arc-ai==0.0.2
+arc-ai==0.0.3
 cloudpickle
 tensorflow
 python-mnist

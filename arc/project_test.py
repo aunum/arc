@@ -1,4 +1,4 @@
-from arc.scm import SCM, obj_module_path
+from arc.scm import obj_module_path
 from arc.data.job import Job
 from numpy import ndarray
 

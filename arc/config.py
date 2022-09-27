@@ -46,7 +46,7 @@ class Config:
 
         if has_arc_yaml():
             self._arc_yaml = load_arc_yaml()
-            
+
         if image_repo is None:
             self.image_repo = self.get_image_repo()
         else:
@@ -54,7 +54,7 @@ class Config:
         if self.image_repo == "":
             raise ValueError("could not find a configured registry url, please set either $ARC_REGISTRY_URL ," +
                              "add `tool.arc.registry_url` to pyproject.toml , or add `registry_url` to arc.yaml")
-        
+
         if docker_socket is None:
             self.docker_socket = self.get_docker_socket()
         else:
@@ -146,4 +146,3 @@ class Config:
                 return RemoteSyncStrategy(self._arc_yaml["remote_sync_strategy"])
 
         return RemoteSyncStrategy.CONTAINER
-

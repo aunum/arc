@@ -96,7 +96,8 @@ class ContainerFile:
 
 
 def containerfile_path() -> str:
-    # we need to change this to project root instead of repository root, we need to walk up the tree till we find the root
+    # we need to change this to project root instead of repository root, 
+    # we need to walk up the tree till we find the root
     repo = git.Repo(".", search_parent_directories=True)
     root_repo_path = repo.working_tree_dir
 

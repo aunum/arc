@@ -1,11 +1,9 @@
 """Entrypoint for the container"""
 
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 import inspect
 from pathlib import PurePath
-
-from git import Object
 
 from arc.scm import SCM
 from arc.image.build import REPO_ROOT, DEFAULT_PORT
@@ -49,7 +47,7 @@ def _func_container_path(func: Callable, scm: Optional[SCM] = None) -> str:
     return str(container_path)
 
 
-def obj_container_path(obj: Object, scm: Optional[SCM] = None) -> str:
+def obj_container_path(obj: Any, scm: Optional[SCM] = None) -> str:
     """Get the path of the function as it will be in the container"""
 
     if scm is None:
@@ -169,7 +167,7 @@ def lives() -> str:
 def receive(args_bytes: bytes, kwargs_bytes: bytes) -> bytes:
     args = pickle.loads(args_bytes.data)
     kwargs = pickle.loads(kwargs_bytes.data)
-    ret = entrypoint_mod.{func.__name__}(*args, **kwargs) 
+    ret = entrypoint_mod.{func.__name__}(*args, **kwargs)
     return pickle.dumps(ret)
 
 # Restrict to a particular path.

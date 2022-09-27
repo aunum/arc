@@ -66,6 +66,8 @@ y_pred = model.predict(sample_img)
 report = job.evaluate(model)
 ```
 
+More [examples here](./examples)
+
 ## Concepts
 
 * [IO](./docs/io.md)

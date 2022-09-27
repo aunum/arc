@@ -1,5 +1,3 @@
-import sys
-import typing
 
 
 def get_orig_class(obj, default_to__class__=False):

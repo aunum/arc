@@ -10,11 +10,9 @@ from kubernetes.client import (
     CoreV1Api,
     V1ObjectMeta,
     V1ServiceAccount,
-    V1Role,
     V1RoleBinding,
     RbacAuthorizationV1Api,
     V1Secret,
-    V1ServiceAccount,
     V1Role,
     V1PolicyRule,
     V1LocalObjectReference,
@@ -24,15 +22,8 @@ from kubernetes.client import (
 )
 from kubernetes.client.rest import ApiException
 from kubernetes import config
-from kubernetes import config
-from kubernetes.client import (
-    CoreV1Api,
-    V1ObjectMeta,
-    RbacAuthorizationV1Api,
-)
 from docker.utils.config import load_general_config
 from docker.auth import load_config
-from kubernetes.client.rest import ApiException
 
 from arc.config import Config
 from arc.kube.env import is_k8s_proc
@@ -306,7 +297,7 @@ def ensure_cluster_auth_resources(
     sa_name = "arc"
 
     if is_k8s_proc():
-        logging.info(f"in kubernetes process; won't create auth resources")
+        logging.info("in kubernetes process; won't create auth resources")
         return AuthResources(secret_name, sa_name)
 
     if core_v1_api is None:

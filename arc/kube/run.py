@@ -225,6 +225,9 @@ def pod(
         if namespace:
             namespace = cfg.kube_namespace
 
+        if namespace is None:
+            raise ValueError("namespce cannot be None")
+
         if clean:
             atexit.register(clean_func, func, namespace, core_v1_api=core_v1_api)
 
@@ -289,7 +292,7 @@ def pod(
                 args_bytes = cloudpickle.dumps(args)  # type: ignore
                 kwargs_bytes = cloudpickle.dumps(kwargs)  # type: ignore
 
-                cmd = f"result = proxy.receive(args_bytes, kwargs_bytes)"
+                cmd = "result = proxy.receive(args_bytes, kwargs_bytes)"
                 d = {}
                 exec(cmd, locals(), d)
                 r = d["result"]

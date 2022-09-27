@@ -1,11 +1,8 @@
 import logging
 
-from arc.data.shapes.classes import ClassData, ClassEncoding
+from arc.data.shapes.classes import ClassData
 from arc.data.shapes.image import ImageData
 from arc.data.job_test import ClassifyDigitsJob
-from arc.model.types import ModelPhase, MultiClassImageClassifier
-from arc.model.metrics import Metrics
-from arc.model.opts import MultiClassClassificationLossOpts, OptimizerOpts
 from arc.model.trainer import Trainer
 
 logging.basicConfig(level=logging.INFO)

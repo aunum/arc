@@ -240,15 +240,15 @@ class TrainerClient(Generic[X, Y]):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with the 
+                        # it will just return the original verion, how do we sync the verion with the
                         # files to tell if its running?
-                        # TODO!
+                        # TODO! https://github.com/aunum/arc/issues/11
                         logging.info(self.info())
                     return
 
         logging.info("model not found running, deploying now...")
         repository, tag = parse_repository_tag(self.uri)
-        registry, repo_name = resolve_repository_name(repository)
+        _, repo_name = resolve_repository_name(repository)
         project_name = repo_name.split("/")[1]
 
         # need to know if this should have a configmap
@@ -360,7 +360,7 @@ class TrainerClient(Generic[X, Y]):
 
             # should check if info returns the right version
             # it will just return the original verion, how do we sync the verion with the files to tell if its running?
-            # TODO!
+            # TODO! https://github.com/aunum/arc/issues/11
             logging.info(self.info())
         return
 

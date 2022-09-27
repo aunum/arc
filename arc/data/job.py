@@ -81,15 +81,6 @@ JOB_SERVER_PATH_LABEL = "server-path"
 SERVER_PORT = "8080"
 JOB_CONFIG_FILE_NAME = "config.json"
 
-
-# Questions:
-# How do we version jobs as new data comes in?
-# What if we could create a generic type that could wrap any other type and provide some sort of API guarantees?
-# How do we ensure people are using the same job? how do we report all metrics to that job?
-# Should this just be a repo of jobs? maybe we report the hash of the job along with the results
-# Do we need to register these? or would it be possible to just do it all with git?
-# When I import a Job would it be possible to say where it is running?
-
 X = TypeVar("X", bound="XData")
 Y = TypeVar("Y", bound="YData")
 
@@ -129,12 +120,19 @@ class SupervisedJobClient(Generic[X, Y]):
         dev_dependencies: Optional[bool] = None,
         **kwargs,
     ) -> None:
-        """Create a SupervisedJobClient
+        """A SupervisedJobClient
 
         Args:
-            # should this just be a container for now?
-            uri (str): OCI URI to the model
-            docker_socket (str, optional): docker socket to use. Defaults to None.
+            uri (Optional[str], optional): URI to create job from. Defaults to None.
+            job (Optional[Type[&quot;SupervisedJob&quot;]], optional): Job to use. Defaults to None.
+            core_v1_api (Optional[CoreV1Api], optional): CoreV1Api to use. Defaults to None.
+            rbac_v1_api (Optional[RbacAuthorizationV1Api], optional): RbacV1Api to use. Defaults to None.
+            docker_socket (Optional[str], optional): Docker socket to use. Defaults to None.
+            namespace (Optional[str], optional): Namespace to use. Defaults to None.
+            cfg (Optional[Config], optional): Config to use. Defaults to None.
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            sync_strategy (RemoteSyncStrategy, optional): SyncStrategy to employ. Defaults to RemoteSyncStrategy.IMAGE.
+            dev_dependencies (Optional[bool], optional): Whether to install dev dependencies. Defaults to None.
         """
 
         self.uri = uri
@@ -163,7 +161,6 @@ class SupervisedJobClient(Generic[X, Y]):
                 config.load_kube_config()
             rbac_v1_api = RbacAuthorizationV1Api()
 
-        # We need to get metadata on the model by looking at the registry and pulling metadata
         if docker_socket is None:
             docker_socket = default_socket()
 
@@ -190,9 +187,6 @@ class SupervisedJobClient(Generic[X, Y]):
         self.model_params_schema = img_labels[JOB_PARAMS_SCHEMA_LABEL]
         self.server_path = img_labels[JOB_SERVER_PATH_LABEL]
 
-        # TODO: find a way to validate schemas during init
-
-        # TODO: # is_k8s_proc()
         # monkey patch the python socket to connect to k8s
         socket_create_connection = socket.create_connection
 
@@ -218,7 +212,7 @@ class SupervisedJobClient(Generic[X, Y]):
 
             logging.debug(f"port forwarding name: {name} and namespace: {namespace} port: {port}")
             pf = portforward(
-                core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(port)  # str(SERVER_PORT)
+                core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(port)
             )
             return pf.socket(int(port))
 
@@ -239,7 +233,6 @@ class SupervisedJobClient(Generic[X, Y]):
                     self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
                     self.pod_name = pod_name
                     self.pod_namespace = namespace
-                    # logging.info(f"server info: {self.info()}")
                     if sync_strategy == RemoteSyncStrategy.CONTAINER:
                         logging.info("sync strategy is container")
                         if SYNC_SHA_LABEL in annotations:
@@ -272,9 +265,9 @@ class SupervisedJobClient(Generic[X, Y]):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with 
+                        # it will just return the original verion, how do we sync the verion with
                         # the files to tell if its running?
-                        # TODO!
+                        # TODO! https://github.com/aunum/arc/issues/11
                         logging.info(self.info())
                     logging.info("returning")
                     return
@@ -283,7 +276,7 @@ class SupervisedJobClient(Generic[X, Y]):
 
         logging.info("model not found running, deploying now...")
         repository, tag = parse_repository_tag(uri)
-        registry, repo_name = resolve_repository_name(repository)
+        _, repo_name = resolve_repository_name(repository)
         project_name = repo_name.split("/")[1]
 
         # need to know if this should have a configmap
@@ -412,22 +405,13 @@ class SupervisedJobClient(Generic[X, Y]):
 
             # should check if info returns the right version
             # it will just return the original verion, how do we sync the verion with the files to tell if its running?
-            # TODO!
+            # TODO! https://github.com/aunum/arc/issues/11
             logging.info(self.info())
 
         return
 
     def validate(self) -> None:
         """Validate the client and server schema are compatible"""
-
-        # orig_bases = self.__orig_bases__
-        # if len(orig_bases) == 0:
-        #     raise ValueError("No X/Y was provided to base class")
-
-        # orig_class = orig_bases[0]
-        # args = typing.get_args(orig_class)
-        # x_cls: Type[X] = args[0]
-        # y_cls: Type[Y] = args[1]
 
         raise NotImplementedError()
 
@@ -451,8 +435,6 @@ class SupervisedJobClient(Generic[X, Y]):
         req = request.Request(f"{self.server_addr}/schema")
         resp = request.urlopen(req)
         return resp.read().decode("utf-8")
-
-    # TODO: stream_one() that uses basic HTTP requests for environments that don't like upgrading
 
     def stream(
         self,
@@ -546,18 +528,6 @@ class SupervisedJobClient(Generic[X, Y]):
             self.x_cls: Type[X] = args[0]
             self.y_cls: Type[Y] = args[1]
 
-            # orig_bases = self.__orig_bases__
-            # if len(orig_bases) == 0:
-            #     raise ValueError("No X/Y was provided to base class")
-
-            # orig_class = orig_bases[0]
-            # args = typing.get_args(orig_class)
-            # x_cls: Type[X] = args[0]
-            # y_cls: Type[Y] = args[1]
-
-            # print("xcls: ", x_cls)
-            # print("ycls: ", y_cls)
-
         if type(model) == SupervisedModel:
             uri = model.image()
         else:
@@ -609,8 +579,6 @@ class SupervisedJobClient(Generic[X, Y]):
 
 class Job(ABC):
     """A machine learning job"""
-
-    # Base job should come with a shapestream
 
     @property
     @abstractmethod
@@ -731,11 +699,6 @@ class SupervisedJob(Generic[X, Y], Job):
             score = self.y_cls.score_cls()(y, y_pred) + score
             print(str(score))
 
-        # save model
-        # should we find the dependencies? https://chapeau.freevariable.com/2017/12/module-frontier.html
-        # should we build a service that watches an OCI registry? and provides better functionality on top?
-        # save data in sqlite database
-
         logging.info("checking if model should be saved")
         model_uri = type(model).__name__
         if type(model) == SupervisedModel:
@@ -755,8 +718,6 @@ class SupervisedJob(Generic[X, Y], Job):
             self.uri = type(self).__name__
             if store:
                 self.uri = self.base_image()
-
-        # we need a job uri
 
         # Save report
         logging.info(f"creating report for model: {model_uri} and job: {self.uri}")
@@ -833,11 +794,6 @@ class SupervisedJob(Generic[X, Y], Job):
         cls_file = cls_file_path.stem
         # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
         server_file_name = f"{cls.__name__.lower()}_server.py"
-
-        # https://github.com/abersheeran/rpc.py
-        # https://sanic.dev/en/guide/advanced/streaming.html#response-streaming
-        # https://github.com/python-hyper/h2
-        # https://github.com/encode/starlette
 
         server_file = f"""
 import json
@@ -995,7 +951,7 @@ async def evaluate(request):
     try:
         model_uri = jdict['model_uri']
         print("model_uri: ", model_uri)
-        
+
         opts = jdict.get("opts", None)
         batch_size = jdict.get("batch_size", 32)
         store = jdict.get("store", True)
@@ -1205,9 +1161,6 @@ if __name__ == "__main__":
                 if f"job-{cls.__name__.lower()}" in tag:
                     ret.append(f"{repo_uri}:{tag}")
         return ret
-
-    # TODO: generate a job template e.g. SupervisedJob[Image, Classes].gen()
-    # should create a file normally or a cell in jupyter
 
 
 class UnsupervisedJob(Generic[X], Job):

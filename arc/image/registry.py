@@ -1,6 +1,5 @@
 from typing import Any, Dict, List
 import json
-import time
 
 import docker
 from docker.utils.utils import parse_repository_tag
@@ -40,8 +39,6 @@ def get_oci_client(uri: str, cli: docker.APIClient = None) -> NewClient:
     Returns:
         NewClient: an OCI client
     """
-    # if cli is None:
-    #     cli = docker.APIClient()
 
     repository, tag = parse_repository_tag(uri)
     registry, repo_name = resolve_repository_name(repository)

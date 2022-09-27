@@ -1,13 +1,8 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Generic, Iterator, List, Optional, Tuple, TypeVar, Dict, Type, NewType
-from arc.data.encoding import ShapeEncoder
-from enum import Enum
+from typing import Any, Dict, Type
 
 import numpy as np
-from dataclasses_jsonschema import JsonSchemaMixin, DEFAULT_SCHEMA_TYPE, JsonDict, SchemaType
-from dataclasses_jsonschema import JsonSchemaMixin, FieldEncoder
 
 from arc.data.types import Data, NDArray
 

@@ -96,7 +96,6 @@ BUILD_MNT_DIR = "/mnt/build"
 
 class Client(ABC):
     """A client"""
-
     pass
 
 
@@ -158,7 +157,7 @@ class Model(ABC, APIUtil):
                 fin_params.append((param, sig.parameters[param].annotation))
             else:
                 fin_params.append(
-                    (param, sig.parameters[param].annotation, 
+                    (param, sig.parameters[param].annotation,
                      field(default=sig.parameters[param].default))  # type: ignore
                 )
 
@@ -169,7 +168,6 @@ class Model(ABC, APIUtil):
         return cls(**opts.__dict__)
 
 
-# Do we want to break that up into a trainer and an inference client?
 class SupervisedModelClient(Generic[X, Y], Client):
     """A client for a supervised model"""
 
@@ -194,12 +192,19 @@ class SupervisedModelClient(Generic[X, Y], Client):
         dev_dependencies: bool = False,
         **kwargs,
     ) -> None:
-        """Create a SupervisedModelClient
+        """A SupervisedModel client
 
         Args:
-            # should this just be a container for now?
-            uri (str): OCI URI to the model
-            docker_socket (str, optional): docker socket to use. Defaults to None.
+            uri (Optional[str], optional): URI of the model. Defaults to None.
+            model (Optional[Type[&quot;SupervisedModel&quot;]], optional): Model to use. Defaults to None.
+            core_v1_api (Optional[CoreV1Api], optional): CoreV1API to use. Defaults to None.
+            rbac_v1_api (Optional[RbacAuthorizationV1Api], optional): RbacV1Api to use. Defaults to None.
+            docker_socket (Optional[str], optional): Docker socket to use. Defaults to None.
+            namespace (Optional[str], optional): Namespace to use. Defaults to None.
+            cfg (Optional[Config], optional): Config to use. Defaults to None.
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
         """
 
         self.uri = uri
@@ -246,7 +251,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
         if model is not None:
             self.uri = model.base_image(scm=scm, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
 
-        # Check schema compatibility between client/server
+        # Check schema compatibility between client/server https://github.com/aunum/arc/issues/12
         img_labels = get_img_labels(self.uri)
 
         if img_labels is None:
@@ -258,8 +263,6 @@ class SupervisedModelClient(Generic[X, Y], Client):
         self.server_path = img_labels[MODEL_SERVER_PATH_LABEL]
         self.model_phase = img_labels[MODEL_PHASE_LABEL]
 
-        # TODO: find a way to validate schemas during init
-        # monkey patch the python socket to connect to k8s
         socket_create_connection = socket.create_connection
 
         def kubernetes_create_connection(address, *args, **kwargs):
@@ -337,9 +340,9 @@ class SupervisedModelClient(Generic[X, Y], Client):
                         logging.info("pod is ready!")
 
                         # should check if info returns the right version
-                        # it will just return the original verion, how do we sync the verion with 
+                        # it will just return the original verion, how do we sync the verion with
                         # the files to tell if its running?
-                        # TODO!
+                        # TODO! https://github.com/aunum/arc/issues/11
                         logging.info(self.info())
                     logging.info("returning")
                     return
@@ -349,7 +352,6 @@ class SupervisedModelClient(Generic[X, Y], Client):
         registry, repo_name = resolve_repository_name(repository)
         project_name = repo_name.split("/")[1]
 
-        # need to know if this should have a configmap
         pod_name = f"{str(project_name).replace('/', '-')}-{tag}"
         if len(pod_name) > 63:
             pod_name = pod_name[:62]
@@ -442,7 +444,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
 
         logging.info(f"pod is ready'{pod_name}'")
 
-        # TODO: handle readiness
+        # TODO: handle readiness https://github.com/aunum/arc/issues/11
         time.sleep(10)
 
         self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
@@ -478,7 +480,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
 
             # should check if info returns the right version
             # it will just return the original verion, how do we sync the verion with the files to tell if its running?
-            # TODO!
+            # TODO! https://github.com/aunum/arc/issues/11
             logging.info(self.info())
         return
 
@@ -523,7 +525,6 @@ class SupervisedModelClient(Generic[X, Y], Client):
         logging.info(resp_data)
         return
 
-    # This neccessitates a Predictor or Router interface, so that fit is not exposed
     def fit(self, x: X, y: Y) -> Metrics:
         """Fit X to Y
 
@@ -534,7 +535,6 @@ class SupervisedModelClient(Generic[X, Y], Client):
         Returns:
             Metrics: Metrics
         """
-        # use the connection to call standardized methods
         params = json.dumps({"x": x, "y": y}, cls=ShapeEncoder).encode("utf8")
         req = request.Request(f"{self.server_addr}/fit", data=params, headers={"content-type": "application/json"})
         resp = request.urlopen(req)
@@ -565,9 +565,9 @@ class SupervisedModelClient(Generic[X, Y], Client):
 
     @classmethod
     def find(cls) -> List["SupervisedModelClient"]:
-        """Find all the models that could be deployed (or are running) that we could find, 
+        """Find all the models that could be deployed (or are running) that we could find,
         should show with the metrics"""
-        pass
+        raise NotImplementedError()
 
     def save(
         self,
@@ -575,6 +575,10 @@ class SupervisedModelClient(Generic[X, Y], Client):
         core_v1_api: Optional[CoreV1Api] = None,
     ) -> str:  # TODO: make this a generator
         """Save the model
+
+        Args:
+            version (Optional[str], optional): Version to use. Defaults to repo version.
+            core_v1_api (Optional[CoreV1Api], optional): CoreV1API to use. Defaults to None.
 
         Returns:
             str: URI of the saved model
@@ -593,7 +597,6 @@ class SupervisedModelClient(Generic[X, Y], Client):
         resp = request.urlopen(req)
         body = resp.read().decode("utf-8")
 
-        # should get the version of the model from the model
         _, tag = parse_repository_tag(self.uri)
         # registry, repo_name = resolve_repository_name(repository)
         # docker_secret = get_dockercfg_secret_name()
@@ -764,7 +767,6 @@ class SupervisedModel(Generic[X, Y], Model):
         """
         pass
 
-    # TODO: should these be conditions?
     @abstractmethod
     def phase(self) -> ModelPhase:
         """Phase of the model
@@ -772,30 +774,7 @@ class SupervisedModel(Generic[X, Y], Model):
         Returns:
             ModelPhase: Phase of the model
         """
-        # We should use this to track the phase of the model
-        # def your_decorator(_cls):
-        #     print("Hello, I'm decor!")
-        #     def wrapper():
-        #         return _cls()
-        #     return wrapper
-
-        # class ParentClass:
-        #     def __init_subclass__(cls, **kwargs):
-        #         return your_decorator(_cls=cls)
-
-        # class A(ParentClass):
-        #     pass
-
-        # a = A()
-
-        # or this https://stackoverflow.com/questions/6307761/how-to-decorate-all-functions-of-a-class-without-typing-it-over-and-over-for-eac  # noqa: E501
-
         pass
-
-    # should have dev mode
-    # def develop(cls) -> SupervisedModelClient:
-
-    #     return SupervisedModelClient()
 
     @property
     def uri(self) -> str:
@@ -1007,14 +986,10 @@ if __name__ == "__main__":
         root_relative = server_filepath.relative_to(repo_root)
         container_path = Path(REPO_ROOT).joinpath(root_relative)
 
-        # create an image using the imglib, and the server_endpoint method
-        # does it makes sense to add command here if its going to be written to the root dockerfile?
-        # feel like we can't not do it too, otherwise we would need to save a k8s artifact or something
         if sync_strategy == RemoteSyncStrategy.IMAGE:
             img_id = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,
                 command=img_command(str(container_path)),
-                # TODO: rethink how we do tags? Maybe each model should be its own repo?
                 tag_prefix=f"model-{cls.__name__.lower()}",
                 labels={
                     MODEL_BASE_NAME_LABEL: "SupervisedModel",
@@ -1037,7 +1012,6 @@ if __name__ == "__main__":
             img_id = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,  # TODO: fix this at the source, we want to copy all files now
                 command=img_command(str(container_path)),
-                # TODO: rethink how we do tags? Maybe each model should be its own repo?
                 tag=f"modelenv-{cls.__name__.lower()}-{scm.env_sha()}",
                 labels={
                     MODEL_BASE_NAME_LABEL: "SupervisedModel",
@@ -1197,9 +1171,6 @@ if __name__ == "__main__":
                 if f"model-{cls.__name__.lower()}" in tag:
                     ret.append(f"{repo_uri}:{tag}")
         return ret
-
-    # TODO: generate a model template e.g. SupervisedModel[Image, Classes].gen()
-    # should create a file normally or a cell in jupyter
 
 
 class UnsupervisedModel(Generic[X], Model):

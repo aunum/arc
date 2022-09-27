@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 from docker_image import reference
 
 
-IT = TypeVar("IT", bound="ImageID")
+ID = TypeVar("ID", bound="ImageID")
 
 
 @dataclass
@@ -15,7 +15,7 @@ class ImageID:
     tag: str
 
     @classmethod
-    def from_ref(cls: Type[IT], image_ref: str) -> IT:
+    def from_ref(cls: Type[ID], image_ref: str) -> ID:
         ref = reference.Reference.parse(image_ref)
         host, repo = ref.split_hostname()
 
