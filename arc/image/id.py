@@ -16,8 +16,8 @@ class ImageID:
 
     @classmethod
     def from_ref(cls: Type[ID], image_ref: str) -> ID:
-        ref = reference.Reference.parse(image_ref)
-        host, repo = ref.split_hostname()
+        host, repo = reference.Reference.split_docker_domain(image_ref)
+        ref = reference.Reference.parse(repo)
 
         return cls(host=host, repository=repo, tag=ref["tag"])
 

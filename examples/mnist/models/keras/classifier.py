@@ -39,6 +39,7 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
         self.optimizer = optimizer
         self.learning_rate = learning_rate
 
+    @classmethod
     def name(self) -> str:
         """Name of the model
 
@@ -46,6 +47,15 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
             str: Model Name
         """
         return "ConvMultiClassImageClassifier"
+
+    @classmethod
+    def short_name(self) -> str:
+        """Short name for the model
+
+        Returns:
+            str: Model short name
+        """
+        return "convimgclassifier"
 
     def phase(self) -> ModelPhase:
         """Phase of the model
@@ -158,15 +168,12 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
 
 if __name__ == "__main__":
 
-    # print("current working dir: ", os.getcwd())
-    # print("rootpath: ", detect())
-
     print("creating model in k8s...")
-    model = ConvMultiClassImageClassifier.develop()
+    model = ConvMultiClassImageClassifier.develop(clean=False)
     print("model info: ", model.info())
 
     print("creating job in k8s...")
-    job = ClassifyDigitsJob.develop()
+    job = ClassifyDigitsJob.develop(clean=False)
 
     print("sampling job")
     sample_img, sample_class = job.sample(1)
@@ -196,5 +203,5 @@ if __name__ == "__main__":
 
     reports = trainer.train(job, model)
 
-    # for uri, report in reports.items():
-    #     print(f"report for {uri}: {report}")
+    for uri, report in reports.items():
+        print(f"report for {uri}: {report}")

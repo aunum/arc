@@ -6,8 +6,8 @@ import sys
 import subprocess
 
 from docker import APIClient
-import enlighten
-from docker_image import reference
+
+# import enlighten
 
 from arc.image.file import ContainerFile, write_containerfile, ARC_DOCKERFILE_NAME, delete_containerfile
 from arc.image.id import ImageID
@@ -67,10 +67,11 @@ def img_id(
     if tag is None:
         tag = img_tag(strategy, scm, tag_prefix=tag_prefix)
 
-    ref = reference.Reference.parse(image_repo)
-    host, repo = ref.split_hostname()
-
-    return ImageID(host=host, repository=repo, tag=tag)
+    id = ImageID.from_ref(image_repo)
+    if id.tag is not None:
+        raise ValueError("image repo should not have tag supplied")
+    id.tag = tag
+    return id
 
 
 def build_containerfile(
@@ -104,21 +105,26 @@ def build_containerfile(
 
     project_root = detect()
     project_root = os.path.join(REPO_ROOT, scm.rel_project_path())
+    if project_root[-1] != "/":
+        project_root = project_root + "/"
 
     print("project root: ", project_root)
     if project_root is None:
-        raise ValueError("could not find project root, looking for .git | requirements.txt" +
-                         " | environment.yml | pyproject.toml")
+        raise ValueError(
+            "could not find project root, looking for .git | requirements.txt" + " | environment.yml | pyproject.toml"
+        )
 
     container_file: Optional[ContainerFile] = None
     if scm.is_poetry_project():
         logging.info("building image for poetry project")
         if sync_strategy == RemoteSyncStrategy.IMAGE:
-            container_file = build_poetry_containerfile(scm.load_pyproject(), project_root, base_image,
-                                                        dev_dependencies)
+            container_file = build_poetry_containerfile(
+                scm.load_pyproject(), project_root, base_image, dev_dependencies
+            )
         elif sync_strategy == RemoteSyncStrategy.CONTAINER:
-            container_file = build_poetry_base_containerfile(scm.load_pyproject(), project_root, base_image,
-                                                             dev_dependencies)
+            container_file = build_poetry_base_containerfile(
+                scm.load_pyproject(), project_root, base_image, dev_dependencies
+            )
         else:
             raise SystemError("unknown sync strategy")
 
@@ -156,9 +162,7 @@ def _add_repo_files(
     """Build a Containerfile for a Poetry project
 
     Args:
-        pyproject_dict (Dict[str, Any]): a parsed pyproject file
-        base_image (str, optional): base image to use. Defaults to None.
-        dev_dependencies (bool, optional): whether to install dev dependencies. Defaults to False.
+        container_file (ContainerFile): Containerfile to add to
         scm (SCM, optional): SCM to use. Defaults to None.
 
     Returns:
@@ -235,7 +239,7 @@ def build_poetry_base_containerfile(
     container_file.env("POETRY_NO_INTERACTION", "1")
     # container_file.env("POETRY_VIRTUALENVS_CREATE", "false")
 
-    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:{REPO_ROOT}:{project_root}")
 
     # apt install -y libffi-dev
     container_file.run("apt update && apt install -y watchdog")
@@ -243,8 +247,12 @@ def build_poetry_base_containerfile(
     # container_file.run("pip uninstall -y setuptools && pip install setuptools")
 
     container_file.workdir(project_root)
+    rel_proj_root = scm.rel_project_path()
 
-    container_file.copy("poetry.lock pyproject.toml", f"{project_root}/")
+    container_file.copy(
+        f"{os.path.join(rel_proj_root, 'poetry.lock')} {os.path.join(rel_proj_root, 'pyproject.toml')}",
+        f"{project_root}",
+    )
     # container_file.run("poetry run python -m pip install --upgrade setuptools")
 
     if dev_dependencies:
@@ -290,7 +298,9 @@ def build_poetry_containerfile(
     return container_file
 
 
-def build_conda_base_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+def build_conda_base_containerfile(
+    project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
+) -> ContainerFile:
     if scm is None:
         scm = SCM()
 
@@ -313,12 +323,13 @@ def build_conda_base_containerfile(project_root: str, base_image: Optional[str] 
         container_file.from_(base_image)
 
     # this needs to be project_root
-    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:{REPO_ROOT}:{project_root}")
 
     container_file.run("apt update && apt install -y watchdog")
 
     container_file.workdir(project_root)
-    container_file.copy("environment.yml", f"{project_root}/")
+    rel_proj_root = scm.rel_project_path()
+    container_file.copy(f"{os.path.join(rel_proj_root, 'environment.yml')}", f"{project_root}")
 
     conda_yaml = load_conda_yaml()
     if "name" not in conda_yaml:
@@ -339,13 +350,17 @@ def build_conda_base_containerfile(project_root: str, base_image: Optional[str] 
     return container_file
 
 
-def build_conda_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+def build_conda_containerfile(
+    project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
+) -> ContainerFile:
     container_file = build_conda_base_containerfile(project_root, base_image, scm)
     container_file = _add_repo_files(container_file, scm)
     return container_file
 
 
-def build_pip_base_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+def build_pip_base_containerfile(
+    project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
+) -> ContainerFile:
     if scm is None:
         scm = SCM()
 
@@ -366,13 +381,14 @@ def build_pip_base_containerfile(project_root: str, base_image: Optional[str] = 
     container_file.env("PIP_NO_CACHE_DIR", "off")
     container_file.env("PIP_DISABLE_PIP_VERSION_CHECK", "on")
 
-    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:/{REPO_ROOT}:/{project_root}")
+    print("project root: ", project_root)
+    container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:{REPO_ROOT}:{project_root}")
 
     container_file.run("apt update && apt install -y watchdog")
 
     container_file.workdir(project_root)
-
-    container_file.copy("requirements.txt", f"{project_root}/")
+    rel_proj_root = scm.rel_project_path()
+    container_file.copy(f"{os.path.join(rel_proj_root, 'requirements.txt')}", f"{project_root}")
 
     container_file.run("python -m pip install -r requirements.txt")
 
@@ -386,7 +402,9 @@ def build_pip_base_containerfile(project_root: str, base_image: Optional[str] = 
     return container_file
 
 
-def build_pip_containerfile(project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None) -> ContainerFile:
+def build_pip_containerfile(
+    project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
+) -> ContainerFile:
     container_file = build_pip_base_containerfile(project_root, base_image, scm)
     container_file = _add_repo_files(container_file, scm)
     return container_file
@@ -401,6 +419,7 @@ def build_img(
     scm: Optional[SCM] = None,
     labels: Optional[Dict[str, str]] = None,
     tag_prefix: Optional[str] = None,
+    clean: bool = True,
 ) -> ImageID:
     """Build image from Containerfile
 
@@ -412,6 +431,7 @@ def build_img(
         scm (SCM, optional): SCM to use. Defaults to None.
         labels (Dict[str, str], optional): Labels to add to the image. Defaults to None.
         tag_prefix (str, optional): Prefix for the image tag. Defaults to None.
+        clean (bool, optional): Whether to clean the generated dockerfile. Defaults to True
 
     Returns:
         ImageID: An ImageID
@@ -427,9 +447,7 @@ def build_img(
     if scm is None:
         scm = SCM()
 
-    image_id = img_id(
-        sync_strategy, image_repo=image_repo, tag=tag, scm=scm, tag_prefix=tag_prefix
-    )
+    image_id = img_id(sync_strategy, image_repo=image_repo, tag=tag, scm=scm, tag_prefix=tag_prefix)
 
     logging.info(f"building image using id '{image_id}'")
 
@@ -448,7 +466,8 @@ def build_img(
         except Exception:
             print(yaml.dump(line))
 
-    delete_containerfile()
+    if clean:
+        delete_containerfile()
     return image_id
 
 
@@ -459,8 +478,8 @@ def push_img(id: ImageID, docker_socket: str = None) -> None:
         id (ImageID): image ID to push
         docker_socket (str, optional): docker socket to use. Defaults to None.
     """
-    manager = enlighten.get_manager()
-    counters: Dict[str, enlighten.Counter] = {}
+    # manager = enlighten.get_manager()
+    # counters: Dict[str, enlighten.Counter] = {}
 
     if docker_socket is None:
         docker_socket = default_socket()
@@ -471,6 +490,8 @@ def push_img(id: ImageID, docker_socket: str = None) -> None:
 
     for line in client.push(id.ref(), stream=True, decode=True):
         print(line)
+        # TODO: fix visualization;  https://github.com/aunum/arc/issues/19
+        # https://github.com/tqdm/tqdm#nested-progress-bars
         # print(line)
         # try:
         #     status = str(line["status"])
@@ -516,6 +537,7 @@ def find_or_build_img(
     tag: Optional[str] = None,
     tag_prefix: Optional[str] = None,
     labels: Optional[Dict[str, str]] = None,
+    clean: bool = True,
 ) -> ImageID:
     """Find the current image or build and push it
 
@@ -528,6 +550,7 @@ def find_or_build_img(
         tag (List[str], optional): Optional tag of the image
         tag_prefix (List[str], optional): Optional prefix for the tag of the image
         labels (Dict[str, str], optional): Labels to add to the image. Defaults to None.
+        clean (bool, optional): Whether to clean the generate files. Default to True
 
     Returns:
         ImageID: An image ID
@@ -563,7 +586,7 @@ def find_or_build_img(
         command=command, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies
     )
 
-    image_id = build_img(container_file, sync_strategy, tag=tag, labels=labels, tag_prefix=tag_prefix)
+    image_id = build_img(container_file, sync_strategy, tag=tag, clean=clean, labels=labels, tag_prefix=tag_prefix)
     push_img(image_id)
 
     return image_id

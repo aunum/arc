@@ -72,8 +72,8 @@ class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
         x, y = self._data_by_type(batch_type)
 
         for i in range(x.shape[0] // batch_size):
-            xb = x[batch_size * i: batch_size * (i + 1)]
-            yb = y[batch_size * i: batch_size * (i + 1)]
+            xb = x[batch_size * i : batch_size * (i + 1)]
+            yb = y[batch_size * i : batch_size * (i + 1)]
 
             # is this too costly computationally?
             yield ImageData(xb, 28, 28, 1, batch_size), ClassData(yb, 10, batch_size, ClassEncoding.CATEGORICAL)
@@ -98,8 +98,8 @@ class ClassifyDigitsJob(SupervisedJob[ImageData, ClassData]):
         x, y = self.x_train, self.y_train
         i = random.randint(1, x.shape[0] // batch_size)
 
-        xb = x[batch_size * i: batch_size * (i + 1)]
-        yb = y[batch_size * i: batch_size * (i + 1)]
+        xb = x[batch_size * i : batch_size * (i + 1)]
+        yb = y[batch_size * i : batch_size * (i + 1)]
 
         return ImageData(xb, 28, 28, 1, batch_size), ClassData(yb, 10, batch_size, ClassEncoding.CATEGORICAL)
 

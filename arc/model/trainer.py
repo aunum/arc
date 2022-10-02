@@ -21,6 +21,9 @@ from kubernetes.client.models import (
     V1ExecAction,
     V1SecretVolumeSource,
     V1KeyToPath,
+    V1EnvVarSource,
+    V1EnvVar,
+    V1ObjectFieldSelector,
 )
 from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from urllib import request
@@ -221,7 +224,7 @@ class TrainerClient(Generic[X, Y]):
                         server_path = trainer.server_entrypoint()
                         logging.info(f"wrote server to path: {server_path}")
                         copy_file_to_pod(
-                            scm.all_files(),
+                            scm.all_files(absolute_paths=True),
                             pod_name,
                             namespace=namespace,
                             base_path=REPO_ROOT.lstrip("/"),
@@ -265,6 +268,12 @@ class TrainerClient(Generic[X, Y]):
             command=img_command(self.server_path),
             image=self.uri,
             ports=[V1ContainerPort(container_port=int(SERVER_PORT))],
+            env=[
+                V1EnvVar(
+                    name="POD_NAME",
+                    value_from=V1EnvVarSource(field_ref=V1ObjectFieldSelector(field_path="metadata.name")),
+                )
+            ],
             startup_probe=V1Probe(
                 success_threshold=1,
                 _exec=V1ExecAction(
@@ -340,7 +349,7 @@ class TrainerClient(Generic[X, Y]):
             server_path = trainer.server_entrypoint()
             logging.info(f"wrote server to path: {server_path}")
             copy_file_to_pod(
-                scm.all_files(),
+                scm.all_files(absolute_paths=True),
                 pod_name,
                 namespace=namespace,
                 base_path=REPO_ROOT.lstrip("/"),
@@ -377,14 +386,16 @@ class TrainerClient(Generic[X, Y]):
 
     def train(
         self,
-        job: Union[SupervisedJob[X, Y], SupervisedJobClient[X, Y],  str],
-        model: Optional[Union[
-            SupervisedModel[X, Y],
-            SupervisedModelClient[X, Y],
-            List[Union[SupervisedModel[X, Y], SupervisedModelClient[X, Y]]],
-            str,
-            List[str],
-        ]] = None,
+        job: Union[SupervisedJob[X, Y], SupervisedJobClient[X, Y], str],
+        model: Optional[
+            Union[
+                SupervisedModel[X, Y],
+                SupervisedModelClient[X, Y],
+                List[Union[SupervisedModel[X, Y], SupervisedModelClient[X, Y]]],
+                str,
+                List[str],
+            ]
+        ] = None,
         max_parallel: int = 10,
         max_search: int = 20,
         evaluate: bool = True,
@@ -431,12 +442,16 @@ class TrainerClient(Generic[X, Y]):
 
         job_uri = ""
         if isinstance(job, str):
+            print("!!! job uri")
             job_uri = job
         elif isinstance(job, SupervisedJob):
+            logging.info(f"creating deployment for job: {job.uri}")
             job_uri = job.deploy(dev_dependencies=dev_dependencies).uri
         elif isinstance(job, SupervisedJobClient):
+            print("!!! supervised job client: ", job.uri)
             job_uri = job.uri
         elif SupervisedJob in job.__bases__:
+            logging.info(f"creating deployment for job: {job.uri}")
             job_uri = job.deploy(dev_dependencies=dev_dependencies).uri
         else:
             raise SystemError(f"unsupported type for 'job': {type(job)}")
@@ -451,6 +466,7 @@ class TrainerClient(Generic[X, Y]):
                 "evaluate": evaluate,
             }
         ).encode("utf8")
+        print("params: ", params)
         req = request.Request(f"{self.server_addr}/train", data=params, headers={"content-type": "application/json"})
         resp = request.urlopen(req)
         resp_data = resp.read().decode("utf-8")
@@ -465,14 +481,16 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
     def train(
         self,
         job: Union[SupervisedJob[X, Y], SupervisedJobClient[X, Y], str],
-        model: Optional[Union[
-            SupervisedModel[X, Y],
-            SupervisedModelClient[X, Y],
-            List[SupervisedModel[X, Y]],
-            List[SupervisedModelClient[X, Y]],
-            str,
-            List[str]
-        ]] = None,
+        model: Optional[
+            Union[
+                SupervisedModel[X, Y],
+                SupervisedModelClient[X, Y],
+                List[SupervisedModel[X, Y]],
+                List[SupervisedModelClient[X, Y]],
+                str,
+                List[str],
+            ]
+        ] = None,
         max_parallel: int = 10,
         max_search: int = 20,
         evaluate: bool = True,
@@ -518,8 +536,13 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
             raise NotImplementedError("automl not yet implemented")
 
         if isinstance(job, str):
+            print("creating job!!!")
+            print(job)
             logging.info(f"creating deployment for job '{job}'")
             job = SupervisedJobClient[x_cls, y_cls](uri=job)
+        else:
+            print("not creating job!!!")
+            print(job)
 
         # compile the models
         sample_img, sample_class = job.sample(1)
@@ -578,27 +601,17 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
         # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
         server_file_name = f"{cls._generic.__origin__.__name__.lower()}_server.py"
         server_file = f"""
-import json
 import logging
 from typing import Any, Dict
 from dataclasses import dataclass
-import sys
-from pathlib import Path
-import time
 import os
-import shutil
 
-from simple_parsing import ArgumentParser
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.schemas import SchemaGenerator
 import uvicorn
 
-from arc.data.encoding import ShapeEncoder
-from arc.model.metrics import Metrics
 from arc.scm import SCM
-from arc.image.build import REPO_ROOT
-from arc.model.types import BUILD_MNT_DIR
 from arc.model.trainer import Trainer
 
 from {cls_file} import {cls.__name__}
@@ -616,14 +629,17 @@ schemas = SchemaGenerator(
     {{"openapi": "3.0.0", "info": {{"title": "{cls_name}", "version": "{version}"}}}}
 )
 
+
 @app.route("/health")
 def health(request):
     return JSONResponse({{"status": "alive"}})
+
 
 @app.route("/info")
 def info(request):
     # model_dict = model.opts().to_dict()
     return JSONResponse({{"version": scm.sha(), "env-sha": scm.env_sha()}})
+
 
 @app.route('/train', methods=["POST"])
 async def train(request):
@@ -636,6 +652,7 @@ async def train(request):
         ret[model_uri] = report.repr_json()
 
     return JSONResponse(ret)
+
 
 @app.route("/schema")
 def openapi_schema(request):

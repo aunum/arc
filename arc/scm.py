@@ -33,9 +33,6 @@ class SCM:
     git_repo: git.Repo
     archive_base_dir: str
 
-    # is_git_project: bool
-    # project_root: str
-
     def __init__(self, archive_base_dir: str = DEFAULT_ARCHIVE_BASE_DIR) -> None:
         """Initialize an SCM repository
 
@@ -103,7 +100,7 @@ class SCM:
         if rp is None:
             raise ValueError("could not detect rootpath")
 
-        return str(os.path.relpath(str(self.git_repo.working_dir), rp))
+        return str(os.path.relpath(rp, str(self.git_repo.working_dir)))
 
     def _dirty_sha(self) -> str:
         """Generate a hash of the repo for any uncommitted or untracked changes
@@ -181,9 +178,13 @@ class SCM:
 
         return h.hexdigest()[-SHORT_HASH_LENGTH:]
 
-    def all_files(self, include_scm: bool = False) -> List[str]:
+    def all_files(self, include_scm: bool = False, absolute_paths: bool = False) -> List[str]:
         """Get all files currently in the repo (tracked or untracked) which
         are not excluded by gitignore
+
+        Args:
+            include_scm (bool, optional): Whether to include .git repository. Defaults to False
+            absolute_paths (bool, optional): Whether to return absolute paths. Defaults to False (relative paths)
 
         Returns:
             List[str]: A list of filepaths
@@ -197,12 +198,20 @@ class SCM:
 
         all_files = self.git_repo.untracked_files
         for path in list_paths(self.git_repo.tree()):
-            if os.path.exists(str(path)):
+            abs_path = os.path.join(str(self.git_repo.working_dir), str(path))
+            if os.path.exists(str(abs_path)):
                 all_files.append(str(path))
 
         if include_scm:
             git_path = os.path.join(str(self.git_repo.working_dir), ".git")
             all_files.append(git_path)
+
+        if absolute_paths:
+            final_files = []
+            for path in all_files:
+                abs_path = os.path.join(str(self.git_repo.working_dir), str(path))
+                final_files.append(abs_path)
+            all_files = final_files
 
         return all_files
 

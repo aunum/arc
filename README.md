@@ -1,10 +1,10 @@
 ![logo](./static/logo.png "Logo")
 
-Arc is a declarative, minimalist, automation-forward machine learning toolkit. It aims to commoditize models by standardizing their IO into a common protocol, making it easy to consume models from _any_ source using your language of choice.   
+Arc is a declarative, minimalist, automation-forward machine learning toolkit. It aims to commoditize models by standardizing their IO into a common protocol, making it easy to consume models from _any_ source using your language of choice. [[io.md](./docs/io.md)]   
 
 Arc embraces the multiplicity of models, allowing for the training and inference of many models from any framework in a distributed manor. Arc aims to scale models through a hetergeneous mixture of experts.
 
-Arc makes the machine learning development lifecycle lightweight and ergonomic. Arc models and jobs can easily be shared and reused within a team, company, or the larger world.   
+Arc makes the machine learning development lifecycle lightweight and ergonomic. Arc models and jobs can easily be shared and reused within a team, company, or the larger world. [[artifacts.md](./docs/artifacts.md)]   
 
 Arc makes use of its standardization patterns to provide rich automation around the selection, tuning, and hardening of models.
 
@@ -31,11 +31,9 @@ _Python >= 3.10; Kubernetes >= 1.22.0_
 
 Arc only requires a working `KUBECONFIG` and an image repository (see [artifacts.md](./docs/artifacts.md)). 
 
-Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :slightly_smiling_face:  
+Arc has 0 runtime dependencies and works with any vanilla Kubernetes cluster :slightly_smiling_face:  If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally.
 
-If you need a Kubernetes cluster, Arc works will with [kind](https://kind.sigs.k8s.io/) locally.
-
-Arc works with Poetry, Conda, and Pip for packaging.
+Poetry, Conda, and Pip are supported for packaging components.
 
 ## Quick Start
 

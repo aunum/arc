@@ -1,7 +1,7 @@
 from typing import Any
 from pathlib import Path
 import inspect
-import rootpath
+import arc.util.rootpath as rootpath
 import os
 
 

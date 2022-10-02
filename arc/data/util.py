@@ -14,7 +14,7 @@ def stream_ndarray(x: np.ndarray, n=32) -> Iterator[np.ndarray]:
         Iterator[np.ndarray]: A generator of ndarray batches
     """
     for i in range(np.shape[0] // n):
-        yield x[n * i: n * (i + 1)]
+        yield x[n * i : n * (i + 1)]
 
 
 class S3Url:

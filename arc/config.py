@@ -34,12 +34,12 @@ class Config:
     _arc_yaml: Optional[Dict[str, Any]] = None
 
     def __init__(
-            self,
-            image_repo: Optional[str] = None,
-            docker_socket: Optional[str] = None,
-            kube_namespace: Optional[str] = None,
-            remote_sync_strategy: Optional[RemoteSyncStrategy] = None
-            ):
+        self,
+        image_repo: Optional[str] = None,
+        docker_socket: Optional[str] = None,
+        kube_namespace: Optional[str] = None,
+        remote_sync_strategy: Optional[RemoteSyncStrategy] = None,
+    ):
 
         if is_pyproject():
             self._pyproject_dict = load_pyproject()
@@ -52,8 +52,10 @@ class Config:
         else:
             self.image_repo = image_repo
         if self.image_repo == "":
-            raise ValueError("could not find a configured registry url, please set either $ARC_REGISTRY_URL ," +
-                             "add `tool.arc.registry_url` to pyproject.toml , or add `registry_url` to arc.yaml")
+            raise ValueError(
+                "could not find a configured registry url, please set either $ARC_REGISTRY_URL ,"
+                + "add `tool.arc.registry_url` to pyproject.toml , or add `registry_url` to arc.yaml"
+            )
 
         if docker_socket is None:
             self.docker_socket = self.get_docker_socket()
@@ -90,7 +92,7 @@ class Config:
                 pass
 
         if self._arc_yaml is not None:
-            if ["image_repo"] in self._arc_yaml:
+            if "image_repo" in self._arc_yaml:
                 return self._arc_yaml["image_repo"]
 
         return ""
@@ -107,7 +109,7 @@ class Config:
                 pass
 
         if self._arc_yaml is not None:
-            if ["docker_socket"] in self._arc_yaml:
+            if "docker_socket" in self._arc_yaml:
                 return self._arc_yaml["docker_socket"]
 
         return ""
@@ -124,7 +126,7 @@ class Config:
                 pass
 
         if self._arc_yaml is not None:
-            if ["kube_namespace"] in self._arc_yaml:
+            if "kube_namespace" in self._arc_yaml:
                 return self._arc_yaml["kube_naemspace"]
 
         return ""
@@ -142,7 +144,7 @@ class Config:
                 pass
 
         if self._arc_yaml is not None:
-            if ["remote_sync_strategy"] in self._arc_yaml:
+            if "remote_sync_strategy" in self._arc_yaml:
                 return RemoteSyncStrategy(self._arc_yaml["remote_sync_strategy"])
 
         return RemoteSyncStrategy.CONTAINER

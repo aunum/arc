@@ -1,6 +1,7 @@
 from typing import List, Optional, Union
 import json
 import os
+import logging
 
 import git
 
@@ -25,7 +26,7 @@ class ContainerFile:
     def run(self, cmd: str) -> None:
         statement = f"RUN {cmd}"
         self._statements.append(statement)
-    
+
     def shell(self, cmd: List[str]):
         statement = f"SHELL {json.dumps(cmd)}"
         self._statements.append(statement)
@@ -96,8 +97,7 @@ class ContainerFile:
 
 
 def containerfile_path() -> str:
-    # we need to change this to project root instead of repository root, 
-    # we need to walk up the tree till we find the root
+    # should we change this to project root? https://github.com/aunum/arc/issues/18
     repo = git.Repo(".", search_parent_directories=True)
     root_repo_path = repo.working_tree_dir
 
@@ -112,4 +112,5 @@ def write_containerfile(c: ContainerFile) -> str:
 
 
 def delete_containerfile() -> None:
+    logging.info("deleting generated containerfile")
     os.remove(containerfile_path())

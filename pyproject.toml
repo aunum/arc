@@ -1,7 +1,7 @@
 [tool.poetry]
 # https://github.com/python-poetry/poetry/issues/705
 name = "arc-ai"
-version = "0.0.3"
+version = "0.0.4"
 description = "Economies of models"
 packages = [{ include = "arc" }]
 authors = ["Patrick Barker <patrickbarkerco@gmail.com>"]
@@ -27,11 +27,9 @@ scikit-learn = "^1.0.2"
 schema = "^0.7.5"
 opencontainers = { extras = ["reggie"], version = "^0.0.12" }
 genson = "^1.2.2"
-rootpath = "^0.1.1"
 simple-parsing = "0.0.20"
 starlette = "^0.20.3"
 tabulate = "^0.8.10"
-ocifacts = "^0.0.1"
 types-tabulate = "^0.8.11"
 websocket-client = "^1.3.3"
 uvicorn = { extras = ["standard"], version = "^0.18.2" }
@@ -43,7 +41,7 @@ types-PyYAML = "^6.0.11"
 
 [tool.poetry.dev-dependencies]
 tensorflow = "^2.9.1"
-black = "^21.12b0"
+black = "^22.8.0"
 flake8 = "^4.0.1"
 isort = "^5.10.1"
 mypy = "^0.931"
@@ -55,7 +53,7 @@ python-mnist = "^0.7"
 
 [tool.arc]
 registry_url = "docker.io"
-image_repository = "oldoceancreature/arc"
+image_repository = "aunum/arc-test"
 
 [tool.flake8]
 max-line-length = 120

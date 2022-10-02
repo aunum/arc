@@ -31,6 +31,8 @@ from kubernetes.client.models import (
     V1ExecAction,
     V1EnvVar,
     V1KeyToPath,
+    V1EnvVarSource,
+    V1ObjectFieldSelector,
 )
 from kubernetes.client import (
     CoreV1Api,
@@ -118,6 +120,7 @@ class SupervisedJobClient(Generic[X, Y]):
         scm: Optional[SCM] = None,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
         dev_dependencies: Optional[bool] = None,
+        clean: bool = True,
         **kwargs,
     ) -> None:
         """A SupervisedJobClient
@@ -133,6 +136,7 @@ class SupervisedJobClient(Generic[X, Y]):
             scm (Optional[SCM], optional): SCM to use. Defaults to None.
             sync_strategy (RemoteSyncStrategy, optional): SyncStrategy to employ. Defaults to RemoteSyncStrategy.IMAGE.
             dev_dependencies (Optional[bool], optional): Whether to install dev dependencies. Defaults to None.
+            clean (bool, optional): Whether to clean the generated files. Defaults to True.
         """
 
         self.uri = uri
@@ -174,13 +178,15 @@ class SupervisedJobClient(Generic[X, Y]):
             namespace = cfg.kube_namespace
 
         if job is not None:
-            uri = job.base_image(scm=scm, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies)
+            self.uri = job.base_image(
+                scm=scm, sync_strategy=sync_strategy, clean=clean, dev_dependencies=dev_dependencies
+            )
 
         # Check schema compatibility between client/server
-        img_labels = get_img_labels(uri)
+        img_labels = get_img_labels(self.uri)
 
         if img_labels is None:
-            raise ValueError(f"image uri '{uri}' does not contain any labels, are you sure it was build by arc?")
+            raise ValueError(f"image uri '{self.uri}' does not contain any labels, are you sure it was build by arc?")
 
         self.model_x_schema = img_labels[JOB_X_DATA_SCHEMA_LABEL]
         self.model_y_schema = img_labels[JOB_Y_DATA_SCHEMA_LABEL]
@@ -211,9 +217,7 @@ class SupervisedJobClient(Generic[X, Y]):
                 return socket_create_connection((addr, port), *args, **kwargs)
 
             logging.debug(f"port forwarding name: {name} and namespace: {namespace} port: {port}")
-            pf = portforward(
-                core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(port)
-            )
+            pf = portforward(core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(port))
             return pf.socket(int(port))
 
         socket.create_connection = kubernetes_create_connection
@@ -228,7 +232,7 @@ class SupervisedJobClient(Generic[X, Y]):
                 continue
             if JOB_LABEL in annotations:
                 server_job_uri = annotations[JOB_LABEL]
-                if server_job_uri == uri:
+                if server_job_uri == self.uri:
                     logging.info("found job running in cluster")
                     self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
                     self.pod_name = pod_name
@@ -246,7 +250,7 @@ class SupervisedJobClient(Generic[X, Y]):
                         server_path = job.server_entrypoint()
                         logging.info(f"wrote server to path: {server_path}")
                         copy_file_to_pod(
-                            scm.all_files(),
+                            scm.all_files(absolute_paths=True),
                             pod_name,
                             namespace=namespace,
                             base_path=REPO_ROOT.lstrip("/"),
@@ -275,7 +279,7 @@ class SupervisedJobClient(Generic[X, Y]):
                 # TODO: store connection to server
 
         logging.info("model not found running, deploying now...")
-        repository, tag = parse_repository_tag(uri)
+        repository, tag = parse_repository_tag(self.uri)
         _, repo_name = resolve_repository_name(repository)
         project_name = repo_name.split("/")[1]
 
@@ -297,7 +301,7 @@ class SupervisedJobClient(Generic[X, Y]):
         container = V1Container(
             name="server",
             command=img_command(self.server_path),
-            image=uri,
+            image=self.uri,
             ports=[V1ContainerPort(container_port=int(SERVER_PORT))],
             startup_probe=V1Probe(
                 success_threshold=1,
@@ -310,7 +314,13 @@ class SupervisedJobClient(Generic[X, Y]):
                 period_seconds=1,
                 failure_threshold=10000,
             ),
-            env=[V1EnvVar(name="JOB_URI", value=uri)],
+            env=[
+                V1EnvVar(name="JOB_URI", value=self.uri),
+                V1EnvVar(
+                    name="POD_NAME",
+                    value_from=V1EnvVarSource(field_ref=V1ObjectFieldSelector(field_path="metadata.name")),
+                ),
+            ],
         )
 
         volume_mounts = [V1VolumeMount(name="dockercfg", mount_path="/root/.docker")]
@@ -353,7 +363,7 @@ class SupervisedJobClient(Generic[X, Y]):
                     SYNC_STRATEGY_LABEL: str(sync_strategy),
                 },
                 annotations={
-                    JOB_LABEL: uri,
+                    JOB_LABEL: self.uri,
                     JOB_X_DATA_SCHEMA_LABEL: self.model_x_schema,
                     JOB_Y_DATA_SCHEMA_LABEL: self.model_y_schema,
                     JOB_PARAMS_SCHEMA_LABEL: self.model_params_schema,
@@ -385,7 +395,7 @@ class SupervisedJobClient(Generic[X, Y]):
             server_path = job.server_entrypoint()
             logging.info(f"wrote server to path: {server_path}")
             copy_file_to_pod(
-                scm.all_files(),
+                scm.all_files(absolute_paths=True),
                 pod_name,
                 namespace=namespace,
                 base_path=REPO_ROOT.lstrip("/"),
@@ -610,8 +620,11 @@ class Job(ABC):
                 fin_params.append((param, sig.parameters[param].annotation))
             else:
                 fin_params.append(
-                    (param, sig.parameters[param].annotation,
-                     field(default=sig.parameters[param].default))  # type: ignore
+                    (
+                        param,
+                        sig.parameters[param].annotation,
+                        field(default=sig.parameters[param].default),
+                    )  # type: ignore
                 )
 
         return make_dataclass(cls.__name__ + "Opts", fin_params, bases=(Serializable, JsonSchemaMixin))
@@ -1093,7 +1106,7 @@ if __name__ == "__main__":
         else:
             raise ValueError("orig_base not found and is needed")
 
-        img_id = cls.base_image(scm, clean, dev_dependencies, sync_strategy=sync_strategy)
+        img_id = cls.base_image(scm, clean=clean, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
 
         client = SupervisedJobClient[x_cls, y_cls](
             uri=img_id, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, **kwargs
@@ -1105,6 +1118,7 @@ if __name__ == "__main__":
         cls,
         scm: Optional[SCM] = None,
         dev_dependencies: bool = True,
+        clean: bool = True,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.CONTAINER,
         **kwargs,
     ) -> SupervisedJobClient[X, Y]:
@@ -1126,7 +1140,7 @@ if __name__ == "__main__":
             raise ValueError("orig_base not found and is needed")
 
         client = SupervisedJobClient[x_cls, y_cls](
-            job=cls, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, scm=scm, **kwargs
+            job=cls, sync_strategy=sync_strategy, clean=clean, dev_dependencies=dev_dependencies, scm=scm, **kwargs
         )
         return client
 
@@ -1137,8 +1151,9 @@ if __name__ == "__main__":
         """Find all versions of this job
 
         Args:
-            cls (Type[SupervisedJob]): the SupervisedJob class
-            repositories (List[str], optional): extra repositories to check
+            cls (Type[SupervisedJob]): The SupervisedJob class
+            repositories (List[str], optional): Extra repositories to check
+            cfg (Config, optional): Config to use
 
         Returns:
             List[str]: A list of versions

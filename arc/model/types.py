@@ -70,6 +70,7 @@ from arc.data.encoding import ShapeEncoder
 from arc.kube.env import is_k8s_proc
 from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.image.build import img_id
+from arc.client import get_client_id
 
 X = TypeVar("X", bound="Data")
 Y = TypeVar("Y", bound="Data")
@@ -88,6 +89,7 @@ MODEL_Y_DATA_SCHEMA_LABEL = "y-schema"
 MODEL_PARAMS_SCHEMA_LABEL = "params-schema"
 MODEL_SERVER_PATH_LABEL = "server-path"
 MODEL_PHASE_LABEL = "model-phase"
+MODEL_OWNER_LABEL = "model-owner"
 SERVER_PORT = "8080"
 MODEL_CONFIG_FILE_NAME = "config.json"
 MODEL_PKL_FILE_NAME = "model.pkl"
@@ -96,6 +98,7 @@ BUILD_MNT_DIR = "/mnt/build"
 
 class Client(ABC):
     """A client"""
+
     pass
 
 
@@ -111,15 +114,23 @@ class APIUtil(JsonSchemaMixin):
 class Model(ABC, APIUtil):
     """A machine learning model"""
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
+    @classmethod
+    def name(cls) -> str:
         """Name of the model
 
         Returns:
             str: The name of the model
         """
-        pass
+        return cls.__name__
+
+    @classmethod
+    def short_name(cls) -> str:
+        """Short name of the model
+
+        Returns:
+            str: Model short name
+        """
+        return cls.name()
 
     def save(self, out_dir: str = "./model") -> None:
         """Save the model
@@ -157,8 +168,11 @@ class Model(ABC, APIUtil):
                 fin_params.append((param, sig.parameters[param].annotation))
             else:
                 fin_params.append(
-                    (param, sig.parameters[param].annotation,
-                     field(default=sig.parameters[param].default))  # type: ignore
+                    (
+                        param,
+                        sig.parameters[param].annotation,
+                        field(default=sig.parameters[param].default),
+                    )  # type: ignore
                 )
 
         return make_dataclass(cls.__name__ + "Opts", fin_params, bases=(Serializable, JsonSchemaMixin))
@@ -190,6 +204,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
         scm: Optional[SCM] = None,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
         dev_dependencies: bool = False,
+        clean: bool = True,
         **kwargs,
     ) -> None:
         """A SupervisedModel client
@@ -205,6 +220,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
             scm (Optional[SCM], optional): SCM to use. Defaults to None.
             sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            clean (bool, optional): Whether to clean the generated files. Defaults to True
         """
 
         self.uri = uri
@@ -249,7 +265,9 @@ class SupervisedModelClient(Generic[X, Y], Client):
             namespace = cfg.kube_namespace
 
         if model is not None:
-            self.uri = model.base_image(scm=scm, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
+            self.uri = model.base_image(
+                scm=scm, dev_dependencies=dev_dependencies, clean=clean, sync_strategy=sync_strategy
+            )
 
         # Check schema compatibility between client/server https://github.com/aunum/arc/issues/12
         img_labels = get_img_labels(self.uri)
@@ -321,7 +339,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
                         server_path = model.server_entrypoint()
                         logging.info(f"wrote server to path: {server_path}")
                         copy_file_to_pod(
-                            scm.all_files(),
+                            scm.all_files(absolute_paths=True),
                             pod_name,
                             namespace=namespace,
                             base_path=REPO_ROOT.lstrip("/"),
@@ -356,14 +374,14 @@ class SupervisedModelClient(Generic[X, Y], Client):
         if len(pod_name) > 63:
             pod_name = pod_name[:62]
 
+        logging.info("ensuring cluster auth resources...")
+        auth_resources = ensure_cluster_auth_resources(core_v1_api, rbac_v1_api, docker_socket, namespace, cfg)
+
         if params is not None:
             cfg = V1ConfigMap(
                 metadata=V1ObjectMeta(name=pod_name, namespace=namespace), data={"cfg": json.dumps(params)}
             )
             core_v1_api.create_namespaced_config_map(namespace, cfg)
-
-        logging.info("ensuring cluster auth resources...")
-        auth_resources = ensure_cluster_auth_resources(core_v1_api, rbac_v1_api, docker_socket, namespace, cfg)
 
         # if not deploy
         container = V1Container(
@@ -389,6 +407,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
             V1VolumeMount(name="dockercfg", mount_path="/root/.docker"),
         ]
         if params is not None:
+            print("$$$ appending config: ", params)
             container.volume_mounts.append(
                 V1VolumeMount(name="config", mount_path=REPO_ROOT, sub_path=MODEL_CONFIG_FILE_NAME)
             )
@@ -417,6 +436,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
                 labels={
                     TYPE_LABEL: "server",
                     MODEL_PHASE_LABEL: self.model_phase,
+                    MODEL_OWNER_LABEL: get_client_id(),
                     REPO_SHA_LABEL: scm.sha(),
                     ENV_SHA_LABEL: scm.env_sha(),
                     REPO_NAME_LABEL: scm.name(),
@@ -460,7 +480,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
             server_path = model.server_entrypoint()
             logging.info(f"wrote server to path: {server_path}")
             copy_file_to_pod(
-                scm.all_files(),
+                scm.all_files(absolute_paths=True),
                 pod_name,
                 namespace=namespace,
                 base_path=REPO_ROOT.lstrip("/"),
@@ -814,16 +834,14 @@ class SupervisedModel(Generic[X, Y], Model):
         cls_file_path = Path(inspect.getfile(cls))
         cls_file = cls_file_path.stem
         # cls_dir = os.path.dirname(os.path.realpath(str(cls_file_path)))
-        server_file_name = f"{cls.__name__.lower()}_server.py"
+        server_file_name = f"{cls.short_name().lower()}_server.py"
 
         server_file = f"""
 import json
 import logging
 from typing import Any, Dict
 from dataclasses import dataclass
-import sys
 from pathlib import Path
-import time
 import os
 import shutil
 
@@ -834,9 +852,9 @@ from starlette.schemas import SchemaGenerator
 import uvicorn
 
 from arc.data.encoding import ShapeEncoder
-from arc.model.metrics import Metrics
 from arc.scm import SCM
-from arc.image.build import REPO_ROOT
+from arc.image.build import REPO_ROOT, build_containerfile
+from arc.image.file import write_containerfile
 from arc.model.types import BUILD_MNT_DIR
 
 from {cls_file} import {cls.__name__}
@@ -873,14 +891,17 @@ schemas = SchemaGenerator(
     {{"openapi": "3.0.0", "info": {{"title": "{cls_name}", "version": "{version}"}}}}
 )
 
+
 @app.route("/health")
 def health(request):
     return JSONResponse({{"status": "alive"}})
-kin
+
+
 @app.route("/info")
 def info(request):
     # model_dict = model.opts().to_dict()
     return JSONResponse({{"name": model.__class__.__name__, "version": scm.sha(), "env-sha": scm.env_sha(), "phase": model.phase().value}})
+
 
 @app.route("/compile", methods=["POST"])
 async def compile(request):
@@ -905,9 +926,15 @@ async def compile(request):
         raise
     return JSONResponse({{"message": "model compiled"}})
 
+
 @app.route("/save", methods=["POST"])
 def save(request):
+    logging.info("saving model")
     model.save()
+    logging.info("building containerfile")
+    c = build_containerfile()
+    logging.info("writing containerfile")
+    write_containerfile(c)
     logging.info("copying directory to build dir...")
     shutil.copytree(REPO_ROOT, BUILD_MNT_DIR, dirs_exist_ok=True)
     return JSONResponse({{"message": "model saved"}})
@@ -929,9 +956,11 @@ async def fit(request):
     metrics = model.fit(x, y)
     return JSONResponse(metrics)
 
+
 class ShapeJSONResponse(JSONResponse):
     def render(self, content: Any) -> bytes:
         return json.dumps(content, cls=ShapeEncoder).encode('utf-8')
+
 
 @app.route("/predict", methods=["POST"])
 async def predict(request):
@@ -940,6 +969,7 @@ async def predict(request):
     y = model.predict(x)
     # encode me
     return ShapeJSONResponse(y)
+
 
 @app.route("/schema")
 def openapi_schema(request):
@@ -990,7 +1020,7 @@ if __name__ == "__main__":
             img_id = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,
                 command=img_command(str(container_path)),
-                tag_prefix=f"model-{cls.__name__.lower()}",
+                tag_prefix=f"model-{cls.short_name().lower()}",
                 labels={
                     MODEL_BASE_NAME_LABEL: "SupervisedModel",
                     MODEL_PHASE_LABEL: ModelPhase.BASE.value,
@@ -1007,12 +1037,13 @@ if __name__ == "__main__":
                     REPO_SHA_LABEL: scm.sha(),
                 },
                 dev_dependencies=dev_dependencies,
+                clean=clean,
             )
         elif sync_strategy == RemoteSyncStrategy.CONTAINER:
             img_id = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,  # TODO: fix this at the source, we want to copy all files now
                 command=img_command(str(container_path)),
-                tag=f"modelenv-{cls.__name__.lower()}-{scm.env_sha()}",
+                tag=f"modelenv-{cls.short_name().lower()}-{scm.env_sha()}",
                 labels={
                     MODEL_BASE_NAME_LABEL: "SupervisedModel",
                     MODEL_PHASE_LABEL: ModelPhase.BASE.value,
@@ -1029,6 +1060,7 @@ if __name__ == "__main__":
                     REPO_SHA_LABEL: scm.sha(),
                 },
                 dev_dependencies=dev_dependencies,
+                clean=clean,
             )
         if clean:
             os.remove(server_filepath)
@@ -1056,7 +1088,7 @@ if __name__ == "__main__":
         img_id = find_or_build_img(
             sync_strategy=RemoteSyncStrategy.IMAGE,
             command=img_command(str(container_path)),
-            tag=f"model-{self.__class__.__name__.lower()}-{scm.sha()}",
+            tag=f"model-{self.short_name().lower()}-{scm.sha()}",
             labels={
                 MODEL_BASE_NAME_LABEL: "SupervisedModel",
                 MODEL_PHASE_LABEL: self.phase().value,
@@ -1072,6 +1104,7 @@ if __name__ == "__main__":
                 REPO_NAME_LABEL: scm.name(),
                 REPO_SHA_LABEL: scm.sha(),
             },
+            clean=clean,
         )
 
         if clean:
@@ -1107,7 +1140,7 @@ if __name__ == "__main__":
 
         img_id = cls.base_image(scm, clean, dev_dependencies)
         return SupervisedModelClient[x_cls, y_cls](  # type: ignore
-            uri=img_id, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, **kwargs
+            uri=img_id, sync_strategy=sync_strategy, clean=clean, dev_dependencies=dev_dependencies, **kwargs
         )
 
     @classmethod
@@ -1137,7 +1170,7 @@ if __name__ == "__main__":
             raise ValueError("orig_base not found and is needed")
 
         return SupervisedModelClient[x_cls, y_cls](  # type: ignore
-            model=cls, sync_strategy=sync_strategy, dev_dependencies=dev_dependencies, scm=scm, **kwargs
+            model=cls, sync_strategy=sync_strategy, clean=clean, dev_dependencies=dev_dependencies, scm=scm, **kwargs
         )
 
     @classmethod

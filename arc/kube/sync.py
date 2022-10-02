@@ -40,7 +40,7 @@ def copy_file_to_pod(
     """Copy the given filepath into the pod
 
     Args:
-        src_path (List[str], str): a local filepath(s) to copy
+        src_path (List[str], str): Local filepath(s) to copy
         pod_name (str): name of the pod
         namespace (str): namespace of the pod. Defaults to 'default'.
         base_path (Optional[str], optional): base path to prepend to the file(s)
@@ -255,7 +255,7 @@ def sync_repo_to_pod(
         if sync_sha != scm.sha():
             logging.info("syncing files to pod")
             copy_file_to_pod(
-                scm.all_files(),
+                scm.all_files(absolute_paths=True),
                 pod_name,
                 namespace=namespace,
                 base_path=REPO_ROOT.lstrip("/"),
@@ -270,7 +270,7 @@ def sync_repo_to_pod(
         logging.info("syncing archive to pod for first time")
         logging.info("syncing files to pod")
         copy_file_to_pod(
-            scm.all_files(),
+            scm.all_files(absolute_paths=True),
             pod_name,
             namespace=namespace,
             base_path=REPO_ROOT.lstrip("/"),
