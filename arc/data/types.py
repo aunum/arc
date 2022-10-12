@@ -126,6 +126,15 @@ class Data(ABC, JsonSchemaMixin):
         """
         pass
 
+    @abstractmethod
+    def compatible(self, data: Data) -> bool:
+        """Are the two types of data compatible
+
+        Returns:
+            bool: Whether the data is compatible
+        """
+        pass
+
     @classmethod
     @abstractmethod
     def short_name(self) -> str:

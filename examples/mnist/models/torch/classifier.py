@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 import os
 
@@ -55,6 +55,14 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
             ModelPhase: Model phase
         """
         return self._phase
+
+    def io(self) -> Tuple[Optional[ImageData], Optional[ClassData]]:
+        """IO this model accepts and returns; if compiled
+
+        Returns:
+            Tuple[Optional[ImageData], Optional[ClassData]]: X and Y the model
+        """
+        return (self._x, self._y)
 
     def compile(self, x: ImageData, y: ClassData) -> None:
         """Compile the model

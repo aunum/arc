@@ -386,18 +386,13 @@ def ensure_cluster_auth_resources(
         rules=[
             V1PolicyRule(
                 api_groups=[""],
-                resources=["pods"],
-                verbs=["get", "list", "watch", "create", "update", "patch", "delete"],
+                resources=["pods", "pods/log", "pods/ephemeralcontainers", "pods/exec"],
+                verbs=["*"],
             ),
             V1PolicyRule(
                 api_groups=[""],
                 resources=["services"],
-                verbs=["get", "list", "watch", "create", "update", "patch", "delete"],
-            ),
-            V1PolicyRule(
-                api_groups=[""],
-                resources=["pods/ephemeralcontainers"],
-                verbs=["get", "list", "watch", "create", "update", "patch", "delete"],
+                verbs=["*"],
             ),
         ],
     )

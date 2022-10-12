@@ -29,6 +29,7 @@ from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from urllib import request
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
+import uuid
 
 
 from arc.data.types import Data, EvalReport
@@ -53,6 +54,7 @@ from arc.data.job import SupervisedJob, SupervisedJobClient
 from arc.model.types import (
     SupervisedModel,
     SupervisedModelClient,
+    ModelPhase,
     MODEL_X_DATA_LABEL,
     MODEL_X_DATA_SCHEMA_LABEL,
     MODEL_Y_DATA_LABEL,
@@ -78,6 +80,7 @@ class TrainerClient(Generic[X, Y]):
 
     pod_name: str
     pod_namespace: str
+    core_v1_api: CoreV1Api
     xcls: Optional[Type[X]] = None
     ycls: Optional[Type[Y]] = None
     uri: Optional[str] = None
@@ -129,6 +132,7 @@ class TrainerClient(Generic[X, Y]):
 
             core_v1_api = CoreV1Api()
 
+        self.core_v1_api = core_v1_api
         if rbac_v1_api is None:
             if is_k8s_proc():
                 config.load_incluster_config()
@@ -256,8 +260,11 @@ class TrainerClient(Generic[X, Y]):
 
         # need to know if this should have a configmap
         pod_name = f"{str(project_name).replace('/', '-')}-{tag}"
-        if len(pod_name) > 63:
-            pod_name = pod_name[:62]
+        if len(pod_name) > 57:
+            pod_name = pod_name[:56]
+
+        uid = str(uuid.uuid4())
+        pod_name = pod_name + "-" + uid[:5]
 
         logging.info("ensuring cluster auth resources...")
         auth_resources = ensure_cluster_auth_resources(core_v1_api, rbac_v1_api, docker_socket, namespace, cfg)
@@ -442,14 +449,18 @@ class TrainerClient(Generic[X, Y]):
 
         job_uri = ""
         if isinstance(job, str):
-            print("!!! job uri")
             job_uri = job
+            if "jobenv" in job and not job.startswith("k8s://"):
+                raise ValueError("cannot use a jobenv that is not a k8s uri, too ambiguous. Try passing job.k8s_uri()")
         elif isinstance(job, SupervisedJob):
             logging.info(f"creating deployment for job: {job.uri}")
             job_uri = job.deploy(dev_dependencies=dev_dependencies).uri
         elif isinstance(job, SupervisedJobClient):
-            print("!!! supervised job client: ", job.uri)
             job_uri = job.uri
+            if "jobenv" in job_uri:
+                logging.info("copying jobenv")
+                running_job = job.copy()
+                job_uri = running_job.k8s_uri()
         elif SupervisedJob in job.__bases__:
             logging.info(f"creating deployment for job: {job.uri}")
             job_uri = job.deploy(dev_dependencies=dev_dependencies).uri
@@ -494,6 +505,7 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
         max_parallel: int = 10,
         max_search: int = 20,
         evaluate: bool = True,
+        destroy: bool = True,
     ) -> Dict[str, EvalReport]:
         """Train models for a job
 
@@ -503,6 +515,7 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
             max_parallel (int, optional): Maximum parallel models to train. Defaults to 10.
             max_search (int, optional): Maximum number of models to search for if none are provided. Defaults to 20.
             evaluate (bool, optional): Wether to evaluate. Defaults to True.
+            destroy (bool, optional): Whether to destory the running models after evaluation, they will still be saved as artifacts. Defaults to True.
         """  # noqa: E501
 
         args = get_args(self.__orig_class__)
@@ -538,6 +551,8 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
         if isinstance(job, str):
             print("creating job!!!")
             print(job)
+            if "jobenv" in job and not job.startswith("k8s://"):
+                raise ValueError("cannot use a jobenv that is not a k8s uri, too ambiguous. Try passing job.k8s_uri()")
             logging.info(f"creating deployment for job '{job}'")
             job = SupervisedJobClient[x_cls, y_cls](uri=job)
         else:
@@ -545,12 +560,27 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
             print(job)
 
         # compile the models
-        sample_img, sample_class = job.sample(1)
-        logging.info(f"sample classes: {sample_class}")
+        sample_x, sample_y = job.sample(1)
+        logging.info(f"sample y: {sample_y}")
 
+        compat_models = []
         for modl in models:
+            info = modl.info()
+            phase = modl.phase()
+            logging.info(f"training model: {info}")
+
+            if phase == ModelPhase.COMPILED.value or phase == ModelPhase.TRAINED.value:
+                x, y = modl.io()
+                if x is None:
+                    raise SystemError("model is compiled but returns no IO")
+                if not sample_x.compatible(x) or not sample_y.compatible(y):
+                    logging.warning(f"model '{modl.name()}' is not compatible with the job, skipping")
+                    continue
+                compat_models.append(modl)
             logging.info(f"compiling model: {modl}")
-            modl.compile(sample_img, sample_class)
+            modl.compile(sample_x, sample_y)
+
+        models = compat_models
 
         logging.info(f"training {len(models)} models")
         for x, y in job.stream():
@@ -568,6 +598,11 @@ class Trainer(RuntimeGeneric, Generic[X, Y]):
                 report = job.evaluate(modl)
                 logging.info(f"model {modl.uri} report: {report}")
                 ret[modl.uri] = report
+
+        if destroy:
+            for modl in models:
+                logging.info(f"deleting model {modl.uri}")
+                modl.delete()
 
         return ret
 
@@ -605,6 +640,7 @@ import logging
 from typing import Any, Dict
 from dataclasses import dataclass
 import os
+import time
 
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -630,6 +666,16 @@ schemas = SchemaGenerator(
 )
 
 
+def update_ts():
+    global last_used_ts
+    last_used_ts = time.time()
+
+
+@app.route("/last_used")
+def last_used(request):
+    return JSONResponse({{"elapsed": time.time() - last_used_ts}})
+
+
 @app.route("/health")
 def health(request):
     return JSONResponse({{"status": "alive"}})
@@ -643,6 +689,7 @@ def info(request):
 
 @app.route('/train', methods=["POST"])
 async def train(request):
+    update_ts()
     jdict = await request.json()
     trainer = Trainer[{x_cls.__name__}, {y_cls.__name__}]()
     res = trainer.train(**jdict)
@@ -842,7 +889,7 @@ if __name__ == "__main__":
         if repositories is None:
             if cfg is None:
                 cfg = Config()
-            repositories = [f"{cfg.registry_url}/{cfg.image_repository}"]
+            repositories = [cfg.image_repo]
 
         if repositories is None:
             # TODO: use current repository

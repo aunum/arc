@@ -43,6 +43,11 @@ from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
 from websocket import create_connection
 from dataclasses_jsonschema import JsonSchemaMixin
+from starlette.applications import Starlette
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
+from starlette.schemas import SchemaGenerator
+from starlette.routing import Route
+import uvicorn
 
 from arc.data.types import XData, YData
 from arc.kube.sync import copy_file_to_pod
@@ -845,6 +850,23 @@ class SupervisedJob(Generic[X, Y], Job):
         cls.y_cls: Type[Y] = args[1]
 
         return None
+
+    @classmethod
+    def add_routes(cls) -> None:
+        return
+
+    @classmethod
+    def serve(cls, num_workers: int = 1, scm: Optional[SCM] = None) -> None:
+        routes = [Route("/", endpoint=homepage), Route("/about", endpoint=about), Route("/info", endpoint=self.info)]
+
+        app = Starlette(routes=routes)
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=8080,
+            log_level="info",
+            workers=num_workers,
+        )
 
     @classmethod
     def server_entrypoint(cls, num_workers: int = 1, scm: Optional[SCM] = None) -> str:

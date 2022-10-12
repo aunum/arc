@@ -35,6 +35,26 @@ class ImageData(Data):
         """
         return "img"
 
+    def compatible(self, data: ImageData) -> bool:
+        """Are the two types of data compatible
+
+        Args:
+            data (ImageData): The ImageData to check
+
+        Returns:
+            bool: Whether the data is compatible
+        """
+        if data.width != self.width:
+            return False
+
+        if data.height != self.height:
+            return False
+
+        if data.channels != self.channels:
+            return False
+
+        return True
+
     def as_ndarray(self) -> NDArray:
         """Image data as an NDArray
 

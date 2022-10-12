@@ -83,6 +83,23 @@ class ClassData(Data):
         """
         return self.data
 
+    def compatible(self, data: ClassData) -> bool:
+        """Are the two types of data compatible
+
+        Args:
+            data (ClassData): The ClassData to check
+
+        Returns:
+            bool: Whether the data is compatible
+        """
+        if data.num_classes != self.num_classes:
+            return False
+
+        if data.names != self.names:
+            return False
+
+        return True
+
     def as_one_hot(self) -> ClassData:
         """Class data as an one hot encoded NDArray
 

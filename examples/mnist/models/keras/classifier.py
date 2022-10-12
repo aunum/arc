@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 import os
 
@@ -26,7 +26,9 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
     optimizer: OptimizerOpts = OptimizerOpts.ADAM
     learning_rate: float = 0.001
 
-    _model: Optional[keras.Sequential] = None
+    model: Optional[keras.Sequential] = None
+    x_sample: Optional[ImageData] = None
+    y_sample: Optional[ClassData] = None
     _phase: ModelPhase = ModelPhase.INITIALIZED
 
     def __init__(
@@ -65,6 +67,14 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
         """
         return self._phase
 
+    def io(self) -> Tuple[ImageData, ClassData]:
+        """IO the model accepts and returns; if compiled
+
+        Returns:
+            Tuple[ImageData, ClassData]: X and Y the model is compiled for.
+        """
+        return self.x_sample, self.y_sample
+
     def compile(self, x: ImageData, y: ClassData) -> None:
         """Compile the model
 
@@ -72,6 +82,9 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
             x (X): Sample input
             y (Y): Sample output
         """
+
+        if self._phase == ModelPhase.COMPILED.value or self._phase == ModelPhase.TRAINED.value:
+            logging.warn("compiling a model which has been previously compiled, this will erase the model")
 
         self.input_shape = x.as_image_shape().squeeze(axis=0).shape
         logging.info(f"x input shape: {self.input_shape}")
@@ -96,7 +109,8 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
 
         # TODO: get rid of this with a wrapper
         self._phase = ModelPhase.COMPILED
-        pass
+        self.x_sample = x
+        self.y_sample = y
 
     def fit(
         self,
@@ -158,8 +172,8 @@ class ConvMultiClassImageClassifier(MultiClassImageClassifier):
         """
         tf_model = tf.keras.models.load_model(os.path.join(dir, "tf_model"))
         path = os.path.join(dir, "model.pkl")
-        with open(path, "r") as f:
-            classifier: "ConvMultiClassImageClassifier" = pickle.loads(f)
+        with open(path, "rb") as f:
+            classifier: "ConvMultiClassImageClassifier" = pickle.load(f)
 
         classifier._model = tf_model
 
