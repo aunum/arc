@@ -53,8 +53,8 @@ class Config:
             self.image_repo = image_repo
         if self.image_repo == "":
             raise ValueError(
-                "could not find a configured registry url, please set either $ARC_REGISTRY_URL ,"
-                + "add `tool.arc.registry_url` to pyproject.toml , or add `registry_url` to arc.yaml"
+                "could not find a configured registry url, please set either $ARC_IMAGE_REPO,"
+                + " add `tool.arc.image_repo` to pyproject.toml, or add `image_repo` to arc.yaml"
             )
 
         if docker_socket is None:

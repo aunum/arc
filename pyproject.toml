@@ -1,6 +1,6 @@
 [tool.poetry]
 # https://github.com/python-poetry/poetry/issues/705
-name = "arc-ai"
+name = "arcos"
 version = "0.0.4"
 description = "Economies of models"
 packages = [{ include = "arc" }]
@@ -38,6 +38,7 @@ kubernetes = "24.2.0"
 typeguard = "^2.13.3"
 types-six = "^1.16.19"
 types-PyYAML = "^6.0.11"
+typer = "^0.6.1"
 
 [tool.poetry.dev-dependencies]
 tensorflow = "^2.9.1"
@@ -52,8 +53,7 @@ pytest = "^6.2.5"
 python-mnist = "^0.7"
 
 [tool.arc]
-registry_url = "docker.io"
-image_repository = "aunum/arc-test"
+image_repo = "aunum/arc-test"
 
 [tool.flake8]
 max-line-length = 120

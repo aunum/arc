@@ -14,7 +14,7 @@ from arc.image.id import ImageID
 from arc.config import Config, RemoteSyncStrategy
 from arc.image.client import default_socket
 from arc.scm import SCM
-from arc.util.rootpath import detect, load_conda_yaml
+from arc.util.rootpath import load_conda_yaml
 
 TOMLDict = Dict[str, Any]
 
@@ -58,6 +58,18 @@ def img_id(
     tag_prefix: Optional[str] = None,
     scm: Optional[SCM] = None,
 ) -> ImageID:
+    """Generate ID for an image based on the environment
+
+    Args:
+        strategy (RemoteSyncStrategy): Sync strategy to use
+        image_repo (Optional[str], optional): Image repository to use. Defaults to None.
+        tag (Optional[str], optional): Tag to use. Defaults to None.
+        tag_prefix (Optional[str], optional): Tag prefix to use. Defaults to None.
+        scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+    Returns:
+        ImageID: An ImageID
+    """
     if image_repo is None:
         image_repo = Config().image_repo
 
@@ -103,16 +115,14 @@ def build_containerfile(
     if sync_strategy is None:
         sync_strategy = cfg.remote_sync_strategy
 
-    project_root = detect()
-    project_root = os.path.join(REPO_ROOT, scm.rel_project_path())
+    rel_path = scm.rel_project_path()
+    project_root = REPO_ROOT
+    if rel_path != "./" and rel_path != ".":
+        project_root = os.path.join(REPO_ROOT, rel_path)
     if project_root[-1] != "/":
         project_root = project_root + "/"
 
-    print("project root: ", project_root)
-    if project_root is None:
-        raise ValueError(
-            "could not find project root, looking for .git | requirements.txt" + " | environment.yml | pyproject.toml"
-        )
+    logging.info(f"using project root: {project_root}")
 
     container_file: Optional[ContainerFile] = None
     if scm.is_poetry_project():
@@ -256,9 +266,9 @@ def build_poetry_base_containerfile(
     # container_file.run("poetry run python -m pip install --upgrade setuptools")
 
     if dev_dependencies:
-        container_file.run("poetry install --no-ansi")
+        container_file.run("poetry install --no-ansi --no-root")
     else:
-        container_file.run("poetry install --no-ansi --no-dev")
+        container_file.run("poetry install --no-ansi --no-root --only main")
 
     # NOTE: there is likely a better way of doing this; copying the .git directory
     # with the tar sync was causing errors, and it is needed for the algorithms to
@@ -301,6 +311,16 @@ def build_poetry_containerfile(
 def build_conda_base_containerfile(
     project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
 ) -> ContainerFile:
+    """Build a base Containerfile for a Conda project
+
+    Args:
+        project_root (str): Root of project
+        base_image (Optional[str], optional): Base image to use. Defaults to None.
+        scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
     if scm is None:
         scm = SCM()
 
@@ -353,6 +373,16 @@ def build_conda_base_containerfile(
 def build_conda_containerfile(
     project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
 ) -> ContainerFile:
+    """Build a Containerfile for a Conda project
+
+    Args:
+        project_root (str): Root of project
+        base_image (Optional[str], optional): Base image to use. Defaults to None.
+        scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
     container_file = build_conda_base_containerfile(project_root, base_image, scm)
     container_file = _add_repo_files(container_file, scm)
     return container_file
@@ -361,6 +391,16 @@ def build_conda_containerfile(
 def build_pip_base_containerfile(
     project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
 ) -> ContainerFile:
+    """Build a base Containerfile for a Pip project
+
+    Args:
+        project_root (str): Root of project
+        base_image (Optional[str], optional): Base image to use. Defaults to None.
+        scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
     if scm is None:
         scm = SCM()
 
@@ -381,7 +421,6 @@ def build_pip_base_containerfile(
     container_file.env("PIP_NO_CACHE_DIR", "off")
     container_file.env("PIP_DISABLE_PIP_VERSION_CHECK", "on")
 
-    print("project root: ", project_root)
     container_file.env("PYTHONPATH", f"${{PYTHONPATH}}:{REPO_ROOT}:{project_root}")
 
     container_file.run("apt update && apt install -y watchdog")
@@ -405,6 +444,16 @@ def build_pip_base_containerfile(
 def build_pip_containerfile(
     project_root: str, base_image: Optional[str] = None, scm: Optional[SCM] = None
 ) -> ContainerFile:
+    """Build a Containerfile for a Pip project
+
+    Args:
+        project_root (str): Root of project
+        base_image (Optional[str], optional): Base image to use. Defaults to None.
+        scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+    Returns:
+        ContainerFile: A Containerfile
+    """
     container_file = build_pip_base_containerfile(project_root, base_image, scm)
     container_file = _add_repo_files(container_file, scm)
     return container_file
@@ -466,8 +515,8 @@ def build_img(
         except Exception:
             print(yaml.dump(line))
 
-    if clean:
-        delete_containerfile()
+    # if clean:
+    # delete_containerfile()
     return image_id
 
 

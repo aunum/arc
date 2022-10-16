@@ -98,7 +98,9 @@ class SCM:
         """
         rp = rootpath.detect()
         if rp is None:
-            raise ValueError("could not detect rootpath")
+            raise ValueError(
+                "could not detect rootpath, looking for .git | requirements.txt | environment.yml | pyproject.toml | arc.yaml"
+            )
 
         return str(os.path.relpath(rp, str(self.git_repo.working_dir)))
 

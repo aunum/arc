@@ -24,7 +24,7 @@ Arc makes use of its standardization patterns to provide rich automation around 
 ## Installation
 
 ```sh
-pip install arc-ai
+pip install arcos
 ```
 
 _Python >= 3.10; Kubernetes >= 1.22.0_

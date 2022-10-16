@@ -1,34 +1,27 @@
-from abc import abstractmethod
+from __future__ import annotations
 import shutil
-from typing import List, Dict, Any, Type, Optional
-from urllib import parse, request
+from urllib import request
 import json
 import socket
+from abc import ABC, ABCMeta
 from simple_parsing import ArgumentParser
-
-from starlette.applications import Starlette
-from starlette.responses import PlainTextResponse, JSONResponse
-from starlette.routing import Route
-from starlette.schemas import SchemaGenerator
-import uvicorn
-
-from arc.scm import SCM
-
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, is_dataclass, make_dataclass, field
-from enum import Enum
-from typing import Dict, Generic, Tuple, TypeVar, List, Any, Optional, Type, Union
+from dataclasses import dataclass
+from typing import Dict, List, Any, Optional, Type, Union
 import inspect
 import time
 import logging
 import os
-import socket
-import json
 import yaml
 from pathlib import Path
-import typing
 import uuid
+from functools import wraps
+from types import FunctionType
 
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.schemas import SchemaGenerator
+import uvicorn
 import cloudpickle as pickle
 from dataclasses_jsonschema import JsonSchemaMixin, T
 from simple_parsing.helpers import Serializable
@@ -62,15 +55,8 @@ from kubernetes.client.models import (
 from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
-from urllib import request
 
-from arc.data.types import Data
-from arc.data.shapes.classes import ClassData
-from arc.data.shapes.image import ImageData
 from arc.kube.sync import copy_file_to_pod
-from arc.model.util import get_orig_class
-from arc.model.metrics import Metrics
-from arc.model.opts import Opts
 from arc.image.client import default_socket
 from arc.image.build import REPO_ROOT, find_or_build_img, img_command
 from arc.kube.pod_util import (
@@ -91,19 +77,22 @@ from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.image.build import img_id
 from arc.client import get_client_id
 from arc.kube.uri import parse_k8s_uri, make_k8s_uri
+from arc.opts import OptsBuilder
 
 
 SERVER_PORT = "8080"
 NAME_LABEL = "name"
 VERSION_LABEL = "version"
-BASES_LABEL = "base"
+BASES_LABEL = "bases"
 PARAMS_SCHEMA_LABEL = "params-schema"
 SERVER_PATH_LABEL = "server-path"
+URI_LABEL = "uri"
 OWNER_LABEL = "owner"
 SERVER_PORT = "8080"
 CONFIG_FILE_NAME = "config.json"
 BUILD_MNT_DIR = "/mnt/build"
 ARTIFACT_TYPE_LABEL = "artifact-type"
+CONFIG_DIR = "/config"
 
 
 class APIUtil(JsonSchemaMixin):
@@ -116,16 +105,31 @@ class APIUtil(JsonSchemaMixin):
 
 
 @dataclass
-class RunningServer:
+class Process:
+    """A Process represents a running process"""
+
     uri: str
+    """URI the process is built from"""
+
     k8s_uri: str
+    """K8s URI where the process is running"""
 
 
 class Client:
-    def provision(
+    """A client for a server running remotely"""
+
+    uri: str
+    artifact_labels: Dict[str, Any]
+    core_v1_api: CoreV1Api
+    rbac_v1_api: RbacAuthorizationV1Api
+    scm: SCM
+    cfg: Config
+    docker_socket: str
+
+    def __init__(
         self,
         uri: Optional[str] = None,
-        server: Optional[Type["Server"]] = None,
+        server: Optional[Union[Type["Server"], "Server"]] = None,
         reuse: bool = True,
         core_v1_api: Optional[CoreV1Api] = None,
         rbac_v1_api: Optional[RbacAuthorizationV1Api] = None,
@@ -138,8 +142,6 @@ class Client:
         clean: bool = True,
         **kwargs,
     ) -> None:
-        self.uri = uri
-        print("client uri: ", self.uri)
 
         params: Optional[Dict[str, Any]] = None
         if len(kwargs) != 0:
@@ -158,6 +160,7 @@ class Client:
                 config.load_kube_config()
 
             core_v1_api = CoreV1Api()
+        self.core_v1_api = core_v1_api
 
         if rbac_v1_api is None:
             if is_k8s_proc():
@@ -165,22 +168,112 @@ class Client:
             else:
                 config.load_kube_config()
             rbac_v1_api = RbacAuthorizationV1Api()
+        self.rbac_v1_api = rbac_v1_api
 
-        self.core_v1_api = core_v1_api
-
-        # We need to get metadata on the model by looking at the registry and pulling metadata
+        # We need to get metadata on the server by looking at the registry and pulling metadata
         if docker_socket is None:
             docker_socket = default_socket()
+        self.docker_socket = docker_socket
 
         if cfg is None:
             cfg = Config()
+        self.cfg = cfg
 
         if scm is None:
             scm = SCM()
+        self.scm = scm
 
         if namespace is None:
             namespace = cfg.kube_namespace
 
+        self._patch_socket(core_v1_api)
+
+        if uri is not None and uri.startswith("k8s://"):
+            self.pod_namespace, self.pod_name = parse_k8s_uri(uri)
+            self.server_addr = f"http://{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{SERVER_PORT}"
+            logging.info(f"connecting directly to pod {self.pod_name} in namespace {self.pod_namespace}")
+            info = self.info()
+            logging.info(f"server info: {info}")
+            self.uri = info["uri"]
+            self.artifact_labels = get_img_labels(self.uri)
+            return
+
+        if server is not None:
+            self.uri = server.base_image(
+                scm=scm, dev_dependencies=dev_dependencies, clean=clean, sync_strategy=sync_strategy
+            )
+            print("type server: ", type(server))
+            if isinstance(server, Server):
+                print("!!! type is server!")
+                if "_kwargs" in server.__dict__:
+                    print("!!! setting server args to kwargs!")
+                    params = server._kwargs  # type: ignore
+        else:
+            if uri is None:
+                raise ValueError("Client URI cannot be none. Either 'uri' or 'server' must be provided")
+            self.uri = uri
+
+        print("client uri: ", self.uri)
+
+        # Check schema compatibility between client/server https://github.com/aunum/arc/issues/12
+        self.artifact_labels = get_img_labels(self.uri)
+
+        if self.artifact_labels is None:
+            raise ValueError(f"image uri '{self.uri}' does not contain any labels, are you sure it was build by arc?")
+
+        if reuse:
+            # check if container exists
+            logging.info("checking if model is already running in cluster")
+            found_pod = self._find_reusable_pod(namespace)
+            if found_pod is not None:
+                logging.info("found reusable server running in cluster")
+                pod_name = found_pod.metadata.name
+                self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
+                self.pod_name = pod_name
+                self.pod_namespace = namespace
+                annotations = found_pod.metadata.annotations
+                logging.info(f"server info: {self.info()}")
+                if sync_strategy == RemoteSyncStrategy.CONTAINER:
+                    logging.info("sync strategy is container")
+                    if SYNC_SHA_LABEL in annotations:
+                        if annotations[SYNC_SHA_LABEL] == scm.sha():
+                            logging.info("sync sha label up to date")
+                            return
+
+                    logging.info("sync sha doesn't match, syncing files")
+                    self._sync_to_pod(server, found_pod, namespace=namespace)
+                return
+
+            logging.info("server not found running, deploying now...")
+
+        logging.info("creating server in cluster")
+        pod = self._create_k8s_resources(
+            sync_strategy=sync_strategy,
+            params=params,
+            namespace=namespace,
+        )
+        pod_name = pod.metadata.name
+
+        # TODO: handle readiness https://github.com/aunum/arc/issues/11
+        time.sleep(10)
+
+        self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
+        self.pod_name = pod_name
+        self.pod_namespace = namespace
+
+        logging.info(f"server info: {self.info()}")
+
+        if sync_strategy == RemoteSyncStrategy.CONTAINER:
+            logging.info("syncing files to server container")
+            self._sync_to_pod(server, pod, namespace)
+        return
+
+    def _patch_socket(self, core_v1_api: CoreV1Api) -> None:
+        """Patch the socket to port forward to k8s pods
+
+        Args:
+            core_v1_api (CoreV1Api): CoreV1API to use
+        """
         socket_create_connection = socket.create_connection
 
         def kubernetes_create_connection(address, *args, **kwargs):
@@ -210,94 +303,96 @@ class Client:
 
         socket.create_connection = kubernetes_create_connection
 
-        if uri is not None and uri.startswith("k8s://"):
-            self.pod_namespace, self.pod_name = parse_k8s_uri(uri)
-            self.server_addr = f"http://{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{SERVER_PORT}"
-            logging.info(f"connecting directly to pod {self.pod_name} in namespace {self.pod_namespace}")
-            info = self.info()
-            logging.info(f"server info: {info}")
-            self.uri = info["uri"]
-            return
+    def _find_reusable_pod(self, namespace: str) -> Optional[V1Pod]:
+        """Find a reusable pod to sync code to
 
-        if server is not None:
-            self.uri = server.base_image(
-                scm=scm, dev_dependencies=dev_dependencies, clean=clean, sync_strategy=sync_strategy
-            )
+        Args:
+            namespace (str): Namespace to look
 
-        # Check schema compatibility between client/server https://github.com/aunum/arc/issues/12
-        img_labels = get_img_labels(self.uri)
+        Returns:
+            Optional[V1Pod]: A pod if found or None.
+        """
+        logging.info("checking if server is already running in cluster")
+        pod_list: V1PodList = self.core_v1_api.list_namespaced_pod(namespace)
+        found_pod: Optional[V1Pod] = None
+        for pod in pod_list.items:
+            annotations = pod.metadata.annotations
+            if annotations is None:
+                continue
+            if URI_LABEL in annotations and OWNER_LABEL in annotations:
+                server_uri = annotations[URI_LABEL]
+                server_owner = annotations[OWNER_LABEL]
+                if server_uri == self.uri:
+                    if server_owner != get_client_id():
+                        logging.warning("found server running in cluster but owner is not current user")
+                    found_pod = pod
+        return found_pod
 
-        if img_labels is None:
-            raise ValueError(f"image uri '{self.uri}' does not contain any labels, are you sure it was build by arc?")
+    def _sync_to_pod(
+        self,
+        server: Optional[Union[Type[Server], Server]],
+        pod: V1Pod,
+        namespace: str,
+    ) -> None:
+        """Sync local code to pod
 
-        self.model_x_schema = img_labels[MODEL_X_DATA_SCHEMA_LABEL]
-        self.model_y_schema = img_labels[MODEL_Y_DATA_SCHEMA_LABEL]
-        self.model_params_schema = img_labels[MODEL_PARAMS_SCHEMA_LABEL]
-        self.server_path = img_labels[SERVER_PATH_LABEL]
-        self.model_phase = img_labels[MODEL_PHASE_LABEL]
+        Args:
+            server (Optional[Type[Server]]): Server type to use
+            pod (V1Pod): Pod to sync to
+            namespace (str): Namespace to use
+        """
+        if server is None:
+            raise ValueError("server cannot be None when doing a container sync")
 
-        # check if container exists
-        if reuse:
-            logging.info("checking if model is already running in cluster")
-            pod_list: V1PodList = core_v1_api.list_namespaced_pod(namespace)
-            for pod in pod_list.items:
-                annotations = pod.metadata.annotations
-                pod_name = pod.metadata.name
-                if annotations is None:
-                    continue
-                if MODEL_LABEL in annotations and OWNER_LABEL in annotations:
-                    server_model_uri = annotations[MODEL_LABEL]
-                    model_owner = annotations[OWNER_LABEL]
-                    if server_model_uri == self.uri:
-                        if model_owner != get_client_id():
-                            logging.warning("found model running in cluster but owner is not current user")
-                        logging.info("found model running in cluster")
-                        self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
-                        self.pod_name = pod_name
-                        self.pod_namespace = namespace
-                        logging.info(f"server info: {self.info()}")
-                        if sync_strategy == RemoteSyncStrategy.CONTAINER:
-                            logging.info("sync strategy is container")
-                            if SYNC_SHA_LABEL in annotations:
-                                if annotations[SYNC_SHA_LABEL] == scm.sha():
-                                    logging.info("sync sha label up to date")
-                                    return
+        server_path = server.server_entrypoint()
+        logging.info(f"wrote server to path: {server_path}")
+        pod_name = pod.metadata.name
+        copy_file_to_pod(
+            self.scm.all_files(absolute_paths=True),
+            pod_name,
+            namespace=namespace,
+            base_path=REPO_ROOT.lstrip("/"),
+            label=True,
+            core_v1_api=self.core_v1_api,
+            scm=self.scm,
+            restart=False,
+        )
+        # TODO: need to remove this sleep
+        time.sleep(10)
+        logging.info("files copied to pod, waiting for pod to become ready")
+        # see if pod is ready
+        ready = wait_for_pod_ready(pod_name, namespace, self.core_v1_api)
+        if not ready:
+            raise SystemError(f"pod {pod_name} never became ready")
+        logging.info("pod is ready!")
 
-                            logging.info("sync sha doesn't match, syncing files")
-                            if model is None:
-                                raise ValueError("job cannot be none when doing a container sync")
-                            server_path = model.server_entrypoint()
-                            logging.info(f"wrote server to path: {server_path}")
-                            copy_file_to_pod(
-                                scm.all_files(absolute_paths=True),
-                                pod_name,
-                                namespace=namespace,
-                                base_path=REPO_ROOT.lstrip("/"),
-                                label=True,
-                                core_v1_api=core_v1_api,
-                                scm=scm,
-                                restart=False,
-                            )
-                            # TODO: need to remove this sleep
-                            time.sleep(10)
-                            logging.info("files copied to pod, waiting for pod to become ready")
-                            # see if pod is ready
-                            ready = wait_for_pod_ready(pod_name, namespace, core_v1_api)
-                            if not ready:
-                                raise SystemError(f"pod {pod_name} never became ready")
-                            logging.info("pod is ready!")
+        # should check if info returns the right version
+        # it will just return the original verion, how do we sync the verion with
+        # the files to tell if its running?
+        # TODO! https://github.com/aunum/arc/issues/11
+        logging.info(self.info())
+        return
 
-                            # should check if info returns the right version
-                            # it will just return the original verion, how do we sync the verion with
-                            # the files to tell if its running?
-                            # TODO! https://github.com/aunum/arc/issues/11
-                            logging.info(self.info())
-                        logging.info("returning")
-                        return
+    def _create_k8s_resources(
+        self,
+        sync_strategy: RemoteSyncStrategy,
+        labels: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        namespace: Optional[str] = None,
+    ) -> V1Pod:
+        """Create the resources needed in Kubernetes
 
-            logging.info("model not found running, deploying now...")
+        Args:
+            sync_strategy (RemoteSyncStrategy): Sync strategy to use
+            labels (Optional[Dict[str, Any]], optional): Labels to add. Defaults to None.
+            params (Optional[Dict[str, Any]], optional): Params for the model to use. Defaults to None.
+            namespace (Optional[str], optional): Namespace to use. Defaults to None.
 
-        logging.info("creating model in cluster")
+        Returns:
+            V1Pod: The created pod
+        """
+
+        print("creating k8s resources with params: ", params)
         repository, tag = parse_repository_tag(self.uri)
         registry, repo_name = resolve_repository_name(repository)
         project_name = repo_name.split("/")[1]
@@ -311,18 +406,22 @@ class Client:
         pod_name = pod_name + "-" + uid[:5]
 
         logging.info("ensuring cluster auth resources...")
-        auth_resources = ensure_cluster_auth_resources(core_v1_api, rbac_v1_api, docker_socket, namespace, cfg)
+        auth_resources = ensure_cluster_auth_resources(
+            self.core_v1_api, self.rbac_v1_api, self.docker_socket, namespace, self.cfg
+        )
 
         if params is not None:
             cfg = V1ConfigMap(
-                metadata=V1ObjectMeta(name=pod_name, namespace=namespace), data={"cfg": json.dumps(params)}
+                metadata=V1ObjectMeta(name=pod_name, namespace=namespace), data={CONFIG_FILE_NAME: json.dumps(params)}
             )
-            core_v1_api.create_namespaced_config_map(namespace, cfg)
+            self.core_v1_api.create_namespaced_config_map(namespace, cfg)
+
+        server_path = self.artifact_labels[SERVER_PATH_LABEL]
 
         # if not deploy
         container = V1Container(
             name="server",
-            command=img_command(self.server_path),
+            command=img_command(server_path),
             image=self.uri,
             ports=[V1ContainerPort(container_port=int(SERVER_PORT))],
             startup_probe=V1Probe(
@@ -345,7 +444,7 @@ class Client:
                     name="POD_NAMESPACE",
                     value_from=V1EnvVarSource(field_ref=V1ObjectFieldSelector(field_path="metadata.namespace")),
                 ),
-                V1EnvVar(name="MODEL_URI", value=self.uri),
+                V1EnvVar(name="ARTIFACT_URI", value=self.uri),
             ],
         )
         container.volume_mounts = [
@@ -353,9 +452,7 @@ class Client:
             V1VolumeMount(name="dockercfg", mount_path="/root/.docker"),
         ]
         if params is not None:
-            container.volume_mounts.append(
-                V1VolumeMount(name="config", mount_path=REPO_ROOT, sub_path=MODEL_CONFIG_FILE_NAME)
-            )
+            container.volume_mounts.append(V1VolumeMount(name="config", mount_path=CONFIG_DIR))
 
         spec = V1PodSpec(
             containers=[container],
@@ -374,80 +471,35 @@ class Client:
         if params is not None:
             spec.volumes.append(V1Volume(name="config", config_map=V1ConfigMapVolumeSource(name=pod_name)))
 
-        pod = V1Pod(
+        annotations = {
+            URI_LABEL: self.uri,
+            OWNER_LABEL: get_client_id(),
+        }
+        annotations.update(self.artifact_labels)
+        po = V1Pod(
             metadata=V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
                 labels={
-                    TYPE_LABEL: "server",
-                    MODEL_PHASE_LABEL: self.model_phase,
-                    REPO_SHA_LABEL: scm.sha(),
-                    ENV_SHA_LABEL: scm.env_sha(),
-                    REPO_NAME_LABEL: scm.name(),
+                    REPO_SHA_LABEL: self.scm.sha(),
+                    ENV_SHA_LABEL: self.scm.env_sha(),
+                    REPO_NAME_LABEL: self.scm.name(),
                     SYNC_STRATEGY_LABEL: str(sync_strategy),
                 },
-                annotations={
-                    MODEL_LABEL: self.uri,
-                    OWNER_LABEL: get_client_id(),
-                    MODEL_X_DATA_LABEL: img_labels[MODEL_X_DATA_LABEL],
-                    MODEL_Y_DATA_LABEL: img_labels[MODEL_Y_DATA_LABEL],
-                    MODEL_SERVER_PATH_LABEL: img_labels[MODEL_SERVER_PATH_LABEL],
-                    MODEL_X_DATA_SCHEMA_LABEL: self.model_x_schema,
-                    MODEL_Y_DATA_SCHEMA_LABEL: self.model_y_schema,
-                    MODEL_PARAMS_SCHEMA_LABEL: self.model_params_schema,
-                },
+                annotations=annotations,
             ),
             spec=spec,
         )
-        # This should run the image on Kubernetes and store a connection to the server
-        core_v1_api.create_namespaced_pod(namespace, pod)
+        self.core_v1_api.create_namespaced_pod(namespace, po)
 
         # see if pod is ready
-        ready = wait_for_pod_ready(pod_name, namespace, core_v1_api)
+        ready = wait_for_pod_ready(pod_name, namespace, self.core_v1_api)
         if not ready:
             raise SystemError(f"pod {pod_name} never became ready")
 
         logging.info(f"pod is ready'{pod_name}'")
 
-        # TODO: handle readiness https://github.com/aunum/arc/issues/11
-        time.sleep(10)
-
-        self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
-        self.pod_name = pod_name
-        self.pod_namespace = namespace
-
-        logging.info(f"server info: {self.info()}")
-
-        if sync_strategy == RemoteSyncStrategy.CONTAINER:
-            logging.info("syncing files to model container")
-            if model is None:
-                raise SystemError("cannot sync files to a container without a model parameter passed in init")
-            server_path = model.server_entrypoint()
-            logging.info(f"wrote server to path: {server_path}")
-            copy_file_to_pod(
-                scm.all_files(absolute_paths=True),
-                pod_name,
-                namespace=namespace,
-                base_path=REPO_ROOT.lstrip("/"),
-                label=True,
-                core_v1_api=core_v1_api,
-                scm=scm,
-                restart=False,
-            )
-            # TODO: need to remove this sleep
-            time.sleep(10)
-            logging.info("files copied to pod, waiting for pod to become ready")
-            # see if pod is ready
-            ready = wait_for_pod_ready(pod_name, namespace, core_v1_api)
-            if not ready:
-                raise SystemError(f"pod {pod_name} never became ready")
-            logging.info("pod is ready!")
-
-            # should check if info returns the right version
-            # it will just return the original verion, how do we sync the verion with the files to tell if its running?
-            # TODO! https://github.com/aunum/arc/issues/11
-            logging.info(self.info())
-        return
+        return po
 
     def info(self) -> Dict[str, Any]:
         """Info about the server
@@ -456,6 +508,17 @@ class Client:
             Dict[str, Any]: Server info
         """
         req = request.Request(f"{self.server_addr}/info")
+        resp = request.urlopen(req)
+        data = resp.read().decode("utf-8")
+        return json.loads(data)
+
+    def labels(self) -> Dict[str, Any]:
+        """Labels for the server
+
+        Returns:
+            Dict[str, Any]: Server info
+        """
+        req = request.Request(f"{self.server_addr}/labels")
         resp = request.urlopen(req)
         data = resp.read().decode("utf-8")
         return json.loads(data)
@@ -479,7 +542,8 @@ class Client:
         """
         req = request.Request(f"{self.server_addr}/schema")
         resp = request.urlopen(req)
-        return resp.read().decode("utf-8")
+        data = resp.read().decode("utf-8")
+        return json.loads(data)
 
     def load(self, dir: str = "./artifacts") -> None:
         """Load the object
@@ -497,35 +561,33 @@ class Client:
         return
 
     def delete(self) -> None:
-        """Delete the model"""
-
+        """Delete the server"""
         self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
 
     @classmethod
     def find(cls) -> List["Client"]:
-        """Find all the models that could be deployed (or are running) that we could find,
-        should show with the metrics"""
+        """Find all the servers that could be deployed (or are running)"""
         raise NotImplementedError()
 
     def k8s_uri(self) -> str:
-        """K8s URI for the model
+        """K8s URI for the server
 
         Returns:
-            str: K8s URI for the model
+            str: K8s URI for the server
         """
         if self.pod_name == "" or self.pod_namespace == "":
             raise ValueError("no pod name or namespace for client")
 
         return make_k8s_uri(self.pod_name, self.pod_namespace)
 
-    def copy(self, core_v1_api: Optional[CoreV1Api] = None) -> RunningServer:
-        """Copy the model
+    def copy(self, core_v1_api: Optional[CoreV1Api] = None) -> Process:
+        """Copy the server
 
         Args:
             core_v1_api (Optional[CoreV1Api], optional): CoreV1Api to sue. Defaults to None.
 
         Returns:
-            RunningModel: A running server
+            RunningServer: A running server
         """
         params = json.dumps({}, cls=ShapeEncoder).encode("utf8")
         req = request.Request(f"{self.server_addr}/copy", data=params, headers={"content-type": "application/json"})
@@ -533,151 +595,180 @@ class Client:
         resp_data = resp.read().decode("utf-8")
 
         jdict = json.loads(resp_data)
-        return RunningServer(uri=jdict["uri"], k8s_uri=jdict["k8s_uri"])
+        return Process(uri=jdict["uri"], k8s_uri=jdict["k8s_uri"])
 
-    # def save(
-    #     self,
-    #     version: Optional[str] = None,
-    #     core_v1_api: Optional[CoreV1Api] = None,
-    # ) -> str:  # TODO: make this a generator
-    #     """Save the model
+    def save(
+        self,
+        version: Optional[str] = None,
+        core_v1_api: Optional[CoreV1Api] = None,
+    ) -> str:  # TODO: make this a generator
+        """Save the server
 
-    #     Args:
-    #         version (Optional[str], optional): Version to use. Defaults to repo version.
-    #         core_v1_api (Optional[CoreV1Api], optional): CoreV1API to use. Defaults to None.
+        Args:
+            version (Optional[str], optional): Version to use. Defaults to repo version.
+            core_v1_api (Optional[CoreV1Api], optional): CoreV1API to use. Defaults to None.
 
-    #     Returns:
-    #         str: URI of the saved model
-    #     """
-    #     if core_v1_api is None:
-    #         if is_k8s_proc():
-    #             config.load_incluster_config()
-    #         else:
-    #             config.load_kube_config()
+        Returns:
+            str: URI of the saved server
+        """
+        if core_v1_api is None:
+            if is_k8s_proc():
+                config.load_incluster_config()
+            else:
+                config.load_kube_config()
 
-    #         core_v1_api = CoreV1Api()
+            core_v1_api = CoreV1Api()
 
-    #     logging.info("saving model...")
+        logging.info("saving server...")
 
-    #     req = request.Request(f"{self.server_addr}/save", method="POST")
-    #     resp = request.urlopen(req)
-    #     body = resp.read().decode("utf-8")
+        req = request.Request(f"{self.server_addr}/save", method="POST")
+        resp = request.urlopen(req)
+        body = resp.read().decode("utf-8")
 
-    #     _, tag = parse_repository_tag(self.uri)
-    #     # registry, repo_name = resolve_repository_name(repository)
-    #     # docker_secret = get_dockercfg_secret_name()
+        _, tag = parse_repository_tag(self.uri)
+        # registry, repo_name = resolve_repository_name(repository)
+        # docker_secret = get_dockercfg_secret_name()
 
-    #     cls_name = tag.split("-")[1]
+        cls_name = tag.split("-")[1]
 
-    #     info = self.info()
-    #     version = info["version"]
-    #     uri = img_id(RemoteSyncStrategy.IMAGE, tag=f"model-{cls_name}-{version}")
+        info = self.info()
+        version = info["version"]
+        uri = img_id(RemoteSyncStrategy.IMAGE, tag=f"{self.artifact_labels[ARTIFACT_TYPE_LABEL]}-{cls_name}-{version}")
 
-    #     path_params = {"name": self.pod_name, "namespace": self.pod_namespace}
+        labels = self.labels()
 
-    #     query_params = []  # type: ignore
-    #     header_params = {}
+        path_params = {"name": self.pod_name, "namespace": self.pod_namespace}
 
-    #     form_params = []  # type: ignore
-    #     local_var_files = {}  # type: ignore
+        query_params = []  # type: ignore
+        header_params = {}
 
-    #     header_params["Accept"] = "application/json"
-    #     header_params["Content-Type"] = "application/strategic-merge-patch+json"
+        form_params = []  # type: ignore
+        local_var_files = {}  # type: ignore
 
-    #     # Authentication setting
-    #     auth_settings = ["BearerToken"]  # noqa: E501
+        header_params["Accept"] = "application/json"
+        header_params["Content-Type"] = "application/strategic-merge-patch+json"
 
-    #     _pod: V1Pod = core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
-    #     labels: Dict[str, str] = _pod.metadata.labels
-    #     annotations: Dict[str, str] = _pod.metadata.annotations
+        # Authentication setting
+        auth_settings = ["BearerToken"]  # noqa: E501
 
-    #     body = {
-    #         "spec": {
-    #             "ephemeralContainers": [
-    #                 {
-    #                     "name": f"snapshot-{int(time.time())}",
-    #                     "args": [
-    #                         f"--context={REPO_ROOT}",
-    #                         f"--destination={uri}",
-    #                         "--dockerfile=Dockerfile.arc",
-    #                         "--ignore-path=/product_uuid",  # https://github.com/GoogleContainerTools/kaniko/issues/2164
-    #                         f"--label={BASE_NAME_LABEL}=SupervisedModel",
-    #                         f"--label={MODEL_PHASE_LABEL}={info['phase']}",
-    #                         f"--label={MODEL_NAME_LABEL}={info['name']}",
-    #                         f"--label={MODEL_VERSION_LABEL}={info['version']}",
-    #                         f"--label={MODEL_X_DATA_LABEL}={annotations[MODEL_X_DATA_LABEL]}",
-    #                         f"--label={MODEL_Y_DATA_LABEL}={annotations[MODEL_Y_DATA_LABEL]}",
-    #                         f"--label={MODEL_X_DATA_SCHEMA_LABEL}={annotations[MODEL_X_DATA_SCHEMA_LABEL]}",
-    #                         f"--label={MODEL_Y_DATA_SCHEMA_LABEL}={annotations[MODEL_Y_DATA_SCHEMA_LABEL]}",
-    #                         f"--label={MODEL_PARAMS_SCHEMA_LABEL}={annotations[MODEL_PARAMS_SCHEMA_LABEL]}",
-    #                         f"--label={MODEL_SERVER_PATH_LABEL}={annotations[MODEL_SERVER_PATH_LABEL]}",
-    #                         f"--label={ENV_SHA_LABEL}={info['env-sha']}",
-    #                         f"--label={REPO_NAME_LABEL}={labels[REPO_NAME_LABEL]}",
-    #                         f"--label={REPO_SHA_LABEL}={info['version']}",
-    #                     ],
-    #                     "image": "gcr.io/kaniko-project/executor:latest",
-    #                     "volumeMounts": [
-    #                         {"mountPath": "/kaniko/.docker/", "name": "dockercfg"},
-    #                         {"mountPath": REPO_ROOT, "name": "build"},
-    #                     ],
-    #                 }
-    #             ]
-    #         }
-    #     }
+        # _pod: V1Pod = core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
 
-    #     core_v1_api.api_client.call_api(
-    #         "/api/v1/namespaces/{namespace}/pods/{name}/ephemeralcontainers",
-    #         "PATCH",
-    #         path_params,
-    #         query_params,
-    #         header_params,
-    #         body,
-    #         post_params=form_params,
-    #         files=local_var_files,
-    #         response_type="V1Pod",  # noqa: E501
-    #         auth_settings=auth_settings,
-    #     )
+        label_args: List[str] = []
+        for k, v in labels.items():
+            label_args.append(f"--label={k}={v}")
 
-    #     logging.info("snapshotting image...")
+        args = [
+            f"--context={REPO_ROOT}",
+            f"--destination={uri}",
+            "--dockerfile=Dockerfile.arc",
+            "--ignore-path=/product_uuid",  # https://github.com/GoogleContainerTools/kaniko/issues/2164
+        ]
+        args.extend(label_args)
+        body = {
+            "spec": {
+                "ephemeralContainers": [
+                    {
+                        "name": f"snapshot-{int(time.time())}",
+                        "args": args,
+                        "image": "gcr.io/kaniko-project/executor:latest",
+                        "volumeMounts": [
+                            {"mountPath": "/kaniko/.docker/", "name": "dockercfg"},
+                            {"mountPath": REPO_ROOT, "name": "build"},
+                        ],
+                    }
+                ]
+            }
+        }
 
-    #     done = False
+        core_v1_api.api_client.call_api(
+            "/api/v1/namespaces/{namespace}/pods/{name}/ephemeralcontainers",
+            "PATCH",
+            path_params,
+            query_params,
+            header_params,
+            body,
+            post_params=form_params,
+            files=local_var_files,
+            response_type="V1Pod",  # noqa: E501
+            auth_settings=auth_settings,
+        )
 
-    #     while not done:
-    #         pod: V1Pod = core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
-    #         status: V1PodStatus = pod.status
+        logging.info("snapshotting image...")
 
-    #         if status.ephemeral_container_statuses is None:
-    #             time.sleep(1)
-    #             logging.info("ephemeral container status is None")
-    #             continue
+        done = False
 
-    #         for container_status in status.ephemeral_container_statuses:
-    #             st: V1ContainerStatus = container_status
-    #             state: V1ContainerState = st.state
+        while not done:
+            pod: V1Pod = core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
+            status: V1PodStatus = pod.status
 
-    #             if state.running is not None:
-    #                 running: V1ContainerStateRunning = state.running
-    #                 logging.info(f"snapshot is running: {running}")
+            if status.ephemeral_container_statuses is None:
+                time.sleep(1)
+                logging.info("ephemeral container status is None")
+                continue
 
-    #             if state.terminated is not None:
-    #                 terminated: V1ContainerStateTerminated = state.terminated
-    #                 logging.info(f"snapshot is terminated: {terminated}")
-    #                 if terminated.exit_code != 0:
-    #                     raise SystemError(
-    #                         f"unable to snapshot image - reason: {terminated.reason} message: {terminated.message}"
-    #                     )
-    #                 done = True
+            for container_status in status.ephemeral_container_statuses:
+                st: V1ContainerStatus = container_status
+                state: V1ContainerState = st.state
 
-    #             if state.waiting is not None:
-    #                 waiting: V1ContainerStateWaiting = state.waiting
-    #                 logging.info(f"snapshot is waiting: {waiting}")
+                if state.running is not None:
+                    running: V1ContainerStateRunning = state.running
+                    logging.info(f"snapshot is running: {running}")
 
-    #         time.sleep(1)
+                if state.terminated is not None:
+                    terminated: V1ContainerStateTerminated = state.terminated
+                    logging.info(f"snapshot is terminated: {terminated}")
+                    if terminated.exit_code != 0:
+                        raise SystemError(
+                            f"unable to snapshot image - reason: {terminated.reason} message: {terminated.message}"
+                        )
+                    done = True
 
-    #     return str(uri)
+                if state.waiting is not None:
+                    waiting: V1ContainerStateWaiting = state.waiting
+                    logging.info(f"snapshot is waiting: {waiting}")
+
+            time.sleep(1)
+
+        return str(uri)
 
 
-class Server(ABC, APIUtil):
+def init_wrapper(method):
+    @wraps(method)
+    def wrapped(*args, **kwargs):
+        self_var = args[0]
+        _kwargs = kwargs.copy()
+        names = method.__code__.co_varnames
+        _kwargs.update(zip(names[1:], args[1:]))
+        if "_kwargs" not in self_var.__dict__:
+            self_var.__dict__["_kwargs"] = _kwargs
+        return method(*args, **kwargs)
+
+    return wrapped
+
+
+class ServerMetaClass(type):
+    """Server metaclass is the metaclass for the Server type"""
+
+    def __new__(meta, classname, bases, classDict):
+        newClassDict = {}
+        for attributeName, attribute in classDict.items():
+            if isinstance(attribute, FunctionType):
+                if attributeName == "__init__":
+                    attribute = init_wrapper(attribute)
+            newClassDict[attributeName] = attribute
+        return type.__new__(meta, classname, bases, newClassDict)
+
+
+class CombinedMeta(ServerMetaClass, ABCMeta):
+    pass
+
+
+class Actor(ABC, APIUtil):  # Does actor or server make more sense?
+    pass
+
+
+# TODO: can we get rid or APIUtil??
+class Server(ABC, APIUtil, metaclass=CombinedMeta):
     """A server that can be built and ran remotely"""
 
     last_used_ts: float
@@ -685,28 +776,70 @@ class Server(ABC, APIUtil):
     schemas: SchemaGenerator
 
     @classmethod
-    def create_from_env(cls) -> "Server":
-        parser = ArgumentParser()
-        parser.add_arguments(cls.opts(), dest="server")
+    def create_from_env(cls: Type["Server"]) -> "Server":
+        """Create the server from the environment, it will look for a saved artifact,
+        a config.json, or command line arguments
 
-        args = parser.parse_args()
+        Returns:
+            Server: A server
+        """
+        log_level = os.getenv("LOG_LEVEL")
+        if log_level is None:
+            print("setting log level to info")
+            logging.basicConfig(level=logging.INFO)
+        else:
+            print("setting log level to env var")
+            logging.basicConfig(level=log_level)
+
+        parser = ArgumentParser()
+        opts = cls.opts()
+        print("opts: ", opts)
+        if opts is not None:
+            parser.add_arguments(opts, dest="server")
+
+        logging.info("logging test0")
 
         artifact_file = Path(f"./artifacts/{cls.short_name()}.pkl")
-        cfg_file = Path("./config.json")
+        cfg_file = Path(CONFIG_DIR, CONFIG_FILE_NAME)
+
+        try:
+            onlyfiles = [f for f in os.listdir(CONFIG_DIR) if os.path.isfile(os.path.join(CONFIG_DIR, f))]
+            print("only files: ", onlyfiles)
+            print("all dir: ", os.listdir(CONFIG_DIR))
+        except Exception as e:
+            print(e)
+            pass
 
         if artifact_file.is_file():
             logging.info("loading srv artifact found locally")
             srv: "Server" = cls.load()
         elif cfg_file.is_file():
-            logging.info("loading srv from config file")
-            srv = cls.load_json(f"./{CONFIG_FILE_NAME}")  # type: ignore
-        else:
+            if opts is None:
+                logging.info("no local artifact, config, or args found. Creating vanilla class without parameters")
+                srv = cls()
+            else:
+                logging.info("loading srv from config file")
+                jopts = opts.load_json(cfg_file)
+                print("jopts: ", jopts)
+                srv = cls.from_opts(jopts)  # type: ignore
+        elif opts is not None:
             logging.info("loading srv from args")
+            args = parser.parse_args()
+            print("past parsing args")
             srv = cls.from_opts(args.server)
+        else:
+            if opts is None:
+                logging.info("no local artifact, config, or args found. Creating vanilla class without parameters")
+                srv = cls()
+            else:
+                logging.info("loading srv from args")
+                args = parser.parse_args()
+                print("past parsing args")
+                srv = cls.from_opts(args.server)
 
-        uri = os.getenv("MODEL_URI")
+        uri = os.getenv("ARTIFACT_URI")
         if uri is None:
-            logging.warning("$MODEL_URI var not found, defaulting to class uri")
+            logging.warning("$ARTIFACT_URI var not found, defaulting to class uri")
         else:
             srv.uri = uri
 
@@ -715,29 +848,113 @@ class Server(ABC, APIUtil):
 
         return srv
 
-    def info_req(self, request):
-        return JSONResponse(
-            {"name": self.__class__.__name__, "version": self.scm().sha(), "env-sha": self.scm().env_sha()}
-        )
+    @classmethod
+    def name(cls) -> str:
+        """Name of the server
 
-    def health_req(self, request):
-        return JSONResponse({"health": "ok"})
+        Returns:
+            str: Name of the server
+        """
+        return cls.__name__
 
     @classmethod
-    def routes(cls) -> List[Route]:
-        return [
-            Route("/info", endpoint=cls.info_req),
-            Route("/health", endpoint=cls.health_req),
-            Route("/schema", endpoint=cls._schema_req),
+    def short_name(cls) -> str:
+        """Short name for the server
+
+        Returns:
+            str: A short name
+        """
+        return cls.__name__.lower()
+
+    @classmethod
+    def artifact_type(cls) -> str:
+        """Type of artifact e.g. model, task, etc..
+
+        Returns:
+            str: Type of artifact
+        """
+        # TODO: this should ideally be the base
+        return cls.short_name()
+
+    def _info_req(self, request):
+        return JSONResponse(
+            {
+                "name": self.__class__.__name__,
+                "version": self.scm.sha(),
+                "env-sha": self.scm.env_sha(),
+                "uri": self.uri,
+            }
+        )
+
+    def _health_req(self, request):
+        return JSONResponse({"health": "ok"})
+
+    def _labels_req(self, request):
+        return JSONResponse(self.labels())
+
+    @classmethod
+    def labels(cls, scm: Optional[SCM] = None) -> Dict[str, Any]:
+        """Labels for the server
+
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+        Returns:
+            Dict[str, Any]: Labels for the server
+        """
+        if scm is None:
+            scm = SCM()
+        bases = inspect.getmro(cls)
+        base_names = []
+        for base in bases:
+            base_names.append(base.__name__)
+
+        base_labels = {
+            BASES_LABEL: json.dumps(base_names),
+            NAME_LABEL: cls.__name__,
+            VERSION_LABEL: scm.sha(),
+            PARAMS_SCHEMA_LABEL: json.dumps(cls.opts_schema()),
+            ENV_SHA_LABEL: scm.env_sha(),
+            REPO_NAME_LABEL: scm.name(),
+            REPO_SHA_LABEL: scm.sha(),
+            TYPE_LABEL: cls.artifact_type(),
+        }
+        return base_labels
+
+    def routes(self) -> List[Route]:
+        """Routes to add to the server
+
+        Returns:
+            List[Route]: List of routes to add to the server
+        """
+        routes = [
+            Route("/info", endpoint=self._info_req, methods=["GET"]),
+            Route("/health", endpoint=self._health_req, methods=["GET"]),
+            Route("/schema", endpoint=self._schema_req, methods=["GET"]),
+            Route("/labels", endpoint=self._labels_req, methods=["GET"]),
         ]
+
+        return routes
 
     @classmethod
     def client_cls(cls) -> Type[Client]:
+        """Class of the client for the server
+
+        Returns:
+            Type[Client]: A client class for the server
+        """
         return Client
 
     @classmethod
-    def server_entrypoint(cls, scm: Optional[SCM] = None) -> str:
+    def server_entrypoint(cls, scm: Optional[SCM] = None, num_workers: int = 1) -> str:
+        """Generate entrypoint for the server
 
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+
+        Returns:
+            str: Path to the entrypoint file
+        """
         obj_module = inspect.getmodule(cls)
         if obj_module is None:
             raise SystemError(f"could not find module for func {obj_module}")
@@ -751,14 +968,38 @@ class Server(ABC, APIUtil):
 
         server_file = f"""
 import logging
+import os
+
+import uvicorn
 
 from {cls_file} import {cls.__name__}
-from {cls_file} import *
+from {cls_file} import *  # noqa: F403, F401
 
-logging.basicConfig(level=logging.INFO)
+log_level = os.getenv("LOG_LEVEL")
+if log_level is None:
+    logging.basicConfig(level=logging.INFO)
+else:
+    logging.basicConfig(level=log_level)
 
-{cls.__name__}.create_from_env().serve()
-        """  # noqa: E501
+logging.info("creating object")
+srv = {cls.__name__}.create_from_env()
+
+logging.info("creating app")
+app = srv.server_app()
+
+if __name__ == "__main__":
+    pkgs = srv._reload_dirs()
+    logging.info(f"starting server version '{{srv.scm.sha()}}' on port: {SERVER_PORT}")
+    uvicorn.run(
+        "__main__:app",
+        host="0.0.0.0",
+        port={SERVER_PORT},
+        log_level="info",
+        workers={num_workers},
+        reload=True,
+        reload_dirs=pkgs.keys(),
+    )
+"""
 
         class_file = inspect.getfile(cls)
         dir_path = os.path.dirname(os.path.realpath(class_file))
@@ -766,14 +1007,6 @@ logging.basicConfig(level=logging.INFO)
         with open(server_filepath, "w") as f:
             f.write(server_file)
         return server_filepath
-
-    @classmethod
-    def name(cls) -> str:
-        return cls.__name__
-
-    @classmethod
-    def short_name(cls) -> str:
-        return cls.__name__.lower()
 
     def save(self, out_dir: str = "./artifacts") -> None:
         """Save the object
@@ -793,44 +1026,47 @@ logging.basicConfig(level=logging.INFO)
         Args:
             dir (str): Directory to the artifacts
         """
-        # https://stackoverflow.com/questions/52591862/how-can-i-save-an-object-containing-keras-models
         path = os.path.join(dir, f"{cls.short_name()}.pkl")
         with open(path, "rb") as f:
             return pickle.load(f)
 
     @classmethod
     def clean_artifacts(cls, dir: str = "./artifacts") -> None:
+        """Clean any created artifacts
+
+        Args:
+            dir (str, optional): Directory where artifacts exist. Defaults to "./artifacts".
+        """
         shutil.rmtree(dir)
 
     @classmethod
-    def opts(cls: Type["Server"]) -> Opts:
-        if is_dataclass(cls):
-            return cls
-        sig = inspect.signature(cls.__init__)
-        fin_params = []
-        for param in sig.parameters:
-            if param == "self":
-                continue
-            if sig.parameters[param].default == inspect._empty:
-                fin_params.append((param, sig.parameters[param].annotation))
-            else:
-                fin_params.append(
-                    (
-                        param,
-                        sig.parameters[param].annotation,
-                        field(default=sig.parameters[param].default),
-                    )  # type: ignore
-                )
+    def opts_schema(cls) -> Dict[str, Any]:
+        """Schema for the server options
 
-        return make_dataclass(cls.__name__ + "Opts", fin_params, bases=(Serializable, JsonSchemaMixin))
+        Returns:
+            Dict[str, Any]: JsonSchema for the server options
+        """
+        opts = OptsBuilder[JsonSchemaMixin].build(cls)
+        if opts is None:
+            return {}
+        return opts.json_schema()
 
-    @abstractmethod
     @classmethod
-    def artifact_type(cls) -> str:
-        pass
+    def opts(cls) -> Optional[Type[Serializable]]:
+        """Options for the server
+
+        Returns:
+            Optional[Type[Serializable]]: Options for the server
+        """
+        return OptsBuilder[Serializable].build(cls)
 
     @property
     def uri(self) -> str:
+        """URI for the resource
+
+        Returns:
+            str: A URI for the resource
+        """
         if self._uri is None:
             return f"{self.__module__}.{self.__class__.__name__}"
         return self._uri
@@ -850,24 +1086,44 @@ logging.basicConfig(level=logging.INFO)
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
         **kwargs,
     ) -> Client:
-        """Create a deployment of the class, which will allow for the generation of instances remotely"""
+        """Create a deployment of the class, which will allow for the generation of instances remotely
+
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            clean (bool, optional): Whether to clean generated files. Defaults to True.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
+
+        Returns:
+            Client: A client for the server
+        """
+
         imgid = cls.base_image(scm, clean, dev_dependencies)
         return cls.client_cls()(  # type: ignore
             uri=imgid, sync_strategy=sync_strategy, clean=clean, scm=scm, dev_dependencies=dev_dependencies, **kwargs
         )
 
-    @classmethod
     def develop(
-        cls,
+        self,
         scm: Optional[SCM] = None,
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
         **kwargs,
     ) -> Client:
-        """Create a deployment of the class, which will allow for the generation of instances remotely"""
-        return cls.client_cls()(  # type: ignore
-            server=cls,
+        """Create a deployment of the class, and sync local code to it
+
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            clean (bool, optional): Whether to clean generated files. Defaults to True.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            reuse (bool, optional): Whether to reuse existing running servers. Defaults to True.
+
+        Returns:
+            Client: A client for the server
+        """
+        return self.client_cls()(  # type: ignore
+            server=self,
             sync_strategy=RemoteSyncStrategy.CONTAINER,
             clean=clean,
             reuse=reuse,
@@ -884,14 +1140,33 @@ logging.basicConfig(level=logging.INFO)
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
     ) -> str:
-        """Create a server image from the model class that can be used to create models from scratch"""
+        """Create an image from the server class that can be used to create servers from scratch
+
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            clean (bool, optional): Whether to clean generated files. Defaults to True.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
+
+        Returns:
+            str: URI for the image
+        """
 
         return cls.build_image(
             cls.artifact_type(), scm=scm, clean=clean, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy
         )
 
     def image(self, scm: Optional[SCM] = None, dev_dependencies: bool = False, clean: bool = True) -> str:
-        """Create a server image with the saved model"""
+        """Create a server image with the saved artifact
+
+        Args:
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            clean (bool, optional): Whether to clean the generated files. Defaults to True.
+
+        Returns:
+            str: URI for the image
+        """
 
         if scm is None:
             scm = SCM()
@@ -920,7 +1195,19 @@ logging.basicConfig(level=logging.INFO)
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
     ) -> str:
-        """Build a generic image for a server"""
+        """Build a generic image for a server
+
+        Args:
+            artifact_type (str): Artifact type of the server
+            labels (Optional[Dict[str, str]], optional): Labels to add. Defaults to None.
+            scm (Optional[SCM], optional): SCM to use. Defaults to None.
+            clean (bool, optional): Whether to clean generated files. Defaults to True.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
+
+        Returns:
+            str: URI of the image
+        """
 
         if scm is None:
             scm = SCM()
@@ -930,30 +1217,18 @@ logging.basicConfig(level=logging.INFO)
         root_relative = server_filepath.relative_to(repo_root)
         container_path = Path(REPO_ROOT).joinpath(root_relative)
 
-        bases = inspect.getmro(cls)
-        base_names = []
-        for base in bases:
-            base_names.append(base.__name__)
-
-        base_labels = {
-            BASES_LABEL: json.dumps(base_names),
-            NAME_LABEL: cls.__name__,
-            VERSION_LABEL: scm.sha(),
-            PARAMS_SCHEMA_LABEL: json.dumps(cls.opts().json_schema()),
-            SERVER_PATH_LABEL: str(container_path),
-            ENV_SHA_LABEL: scm.env_sha(),
-            REPO_NAME_LABEL: scm.name(),
-            REPO_SHA_LABEL: scm.sha(),
-        }
+        base_labels = cls.labels()
         if labels is not None:
             base_labels.update(labels)
+
+        base_labels[SERVER_PATH_LABEL] = str(container_path)
 
         if sync_strategy == RemoteSyncStrategy.IMAGE:
             imgid = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,
                 command=img_command(str(container_path)),
                 tag_prefix=f"{artifact_type.lower()}-{cls.short_name().lower()}",
-                labels=labels,
+                labels=base_labels,
                 dev_dependencies=dev_dependencies,
                 clean=clean,
             )
@@ -962,7 +1237,7 @@ logging.basicConfig(level=logging.INFO)
                 sync_strategy=RemoteSyncStrategy.IMAGE,  # TODO: fix this at the source, we want to copy all files now
                 command=img_command(str(container_path)),
                 tag=f"{artifact_type.lower()}env-{cls.short_name().lower()}-{scm.env_sha()}",
-                labels=labels,
+                labels=base_labels,
                 dev_dependencies=dev_dependencies,
                 clean=clean,
             )
@@ -972,8 +1247,39 @@ logging.basicConfig(level=logging.INFO)
         return str(imgid)
 
     @classmethod
-    def from_opts(cls: Type["Server"], opts: Opts) -> "Server":
+    def from_opts(cls: Type["Server"], opts: Type[Serializable]) -> "Server":
+        """Load server from Opts
+
+        Args:
+            cls (Type[&quot;Server&quot;]): Server
+            opts (Opts): Opts to load from
+
+        Returns:
+            Server: A server
+        """
         return cls(**opts.__dict__)
+
+    def server_app(self) -> Starlette:
+        """Starlette server app
+
+        Returns:
+            Starlette: A server app
+        """
+        routes = self.routes()
+
+        app = Starlette(routes=routes)
+        self.schemas = SchemaGenerator(
+            {"openapi": "3.0.0", "info": {"title": self.__class__.__name__, "version": self.scm.sha()}}
+        )
+        return app
+
+    def _reload_dirs(self) -> Dict[str, str]:
+        pkgs: Dict[str, str] = {}
+        for fp in self.scm.all_files():
+            dir = os.path.dirname(fp)
+            pkgs[dir] = ""
+
+        return pkgs
 
     def serve(self, port: int = 8080, log_level: str = "info", reload: bool = True) -> None:
         """Serve the class
@@ -983,19 +1289,11 @@ logging.basicConfig(level=logging.INFO)
             log_level (str, optional): Log level. Defaults to "info".
             reload (bool, optional): Whether to hot reload. Defaults to True.
         """
-        routes = self.routes()
+        app = self.server_app()
 
-        app = Starlette(routes=routes)
-        self.schemas = SchemaGenerator(
-            {"openapi": "3.0.0", "info": {"title": self.__class__.__name__, "version": self.scm.sha()}}
-        )
+        pkgs = self._reload_dirs()
 
-        pkgs: Dict[str, str] = {}
-        for fp in self.scm.all_files():
-            dir = os.path.dirname(fp)
-            pkgs[dir] = ""
-
-        logging.info("starting server version '{version}' on port: {SERVER_PORT}")
+        logging.info(f"starting server version '{self.scm.sha()}' on port: {SERVER_PORT}")
         uvicorn.run(
             app,
             host="0.0.0.0",
@@ -1018,6 +1316,7 @@ logging.basicConfig(level=logging.INFO)
         Args:
             cls (Type[Server]): the Server class
             repositories (List[str], optional): extra repositories to check
+            cfg (Config, optional): Config to use
 
         Returns:
             List[str]: A list of versions

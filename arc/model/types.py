@@ -412,9 +412,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
             logging.info("model not found running, deploying now...")
 
         logging.info("creating model in cluster")
-        pod = self._create_pod_def()
-        # This should run the image on Kubernetes and store a connection to the server
-        core_v1_api.create_namespaced_pod(namespace, pod)
+        pod_name = self._create_k8s_resources()
 
         # see if pod is ready
         ready = wait_for_pod_ready(pod_name, namespace, core_v1_api)
@@ -463,8 +461,11 @@ class SupervisedModelClient(Generic[X, Y], Client):
             logging.info(self.info())
         return
 
-    def _create_pod_def(
+    def _create_k8s_resources(
         self,
+        sync_strategy: RemoteSyncStrategy,
+        labels: Optional[Dict[str, Any]] = None,
+        annotations: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         core_v1_api: Optional[CoreV1Api] = None,
         rbac_v1_api: Optional[RbacAuthorizationV1Api] = None,
@@ -472,7 +473,7 @@ class SupervisedModelClient(Generic[X, Y], Client):
         namespace: Optional[str] = None,
         cfg: Optional[Config] = None,
         scm: Optional[SCM] = None,
-    ) -> V1Pod:
+    ) -> str:
 
         repository, tag = parse_repository_tag(self.uri)
         registry, repo_name = resolve_repository_name(repository)
@@ -575,7 +576,11 @@ class SupervisedModelClient(Generic[X, Y], Client):
             ),
             spec=spec,
         )
-        return po
+        core_v1_api.create_namespaced_pod(namespace, po)
+        return pod_name
+
+    def get_labels(self) -> Dict[str, Any]:
+
 
     def validate(self) -> None:
         """Validate the client and server schema are compatible"""
