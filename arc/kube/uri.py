@@ -1,4 +1,16 @@
-from typing import Tuple
+from typing import Tuple, Any
+
+
+def make_py_uri(obj: Any) -> str:
+    """Make a python URI
+
+    Args:
+        obj (Any): Any object
+
+    Returns:
+        str: A python URI
+    """
+    return f"py://{obj.__module__}"
 
 
 def make_k8s_uri(pod_name: str, namespace: str) -> str:

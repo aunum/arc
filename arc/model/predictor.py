@@ -38,7 +38,7 @@ from urllib import request
 
 from arc.data.types import Data
 from arc.kube.sync import copy_file_to_pod
-from arc.model.types import ModelPhase, SupervisedModel, SupervisedModelClient
+from arc.model.types import SupervisedModel, SupervisedModelClient
 from arc.model.util import get_orig_class
 from arc.model.opts import Opts
 from arc.image.client import default_socket

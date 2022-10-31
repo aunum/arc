@@ -1,12 +1,12 @@
 from __future__ import annotations
+from dataclasses import dataclass
 import shutil
 from urllib import request
 import json
 import socket
-from abc import ABC, ABCMeta, abstractmethod, abstractproperty
+from abc import ABCMeta
 from simple_parsing import ArgumentParser
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Any, Optional, Type, TypeVar, Union, get_type_hints
+from typing import Dict, Iterable, List, Any, Optional, Type, TypeVar, Union, get_args, get_type_hints
 import typing
 import inspect
 import time
@@ -18,10 +18,9 @@ import uuid
 from functools import wraps
 from types import FunctionType
 from inspect import signature
+import importlib
 
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
-from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 import uvicorn
 import cloudpickle as pickle
@@ -78,9 +77,10 @@ from arc.kube.env import is_k8s_proc
 from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.image.build import img_id
 from arc.client import get_client_id
-from arc.kube.uri import parse_k8s_uri, make_k8s_uri
+from arc.kube.uri import make_py_uri, parse_k8s_uri, make_k8s_uri
 from arc.opts import OptsBuilder
-from arc.kind import Kind
+from arc.kind import Kind, PID, ObjectLocator, OBJECT_URI_ENV
+
 
 SERVER_PORT = "8080"
 NAME_LABEL = "name"
@@ -106,18 +106,7 @@ class APIUtil(JsonSchemaMixin):
         return yaml.dump(self.to_dict(omit_none, validate), **yaml_kwargs)
 
 
-@dataclass
-class Process:
-    """A Process represents a running process"""
-
-    uri: str
-    """URI the process is built from"""
-
-    k8s_uri: str
-    """K8s URI where the process is running"""
-
-
-class Client:
+class Client(Kind):
     """A client for a server running remotely"""
 
     uri: str
@@ -131,7 +120,7 @@ class Client:
     def __init__(
         self,
         uri: Optional[str] = None,
-        server: Optional[Union[Type["Server"], "Server"]] = None,
+        server: Optional[Union[Type["Resource"], "Resource"]] = None,
         reuse: bool = True,
         core_v1_api: Optional[CoreV1Api] = None,
         rbac_v1_api: Optional[RbacAuthorizationV1Api] = None,
@@ -201,10 +190,8 @@ class Client:
             return
 
         if server is not None:
-            self.uri = server.base_image(
-                scm=scm, dev_dependencies=dev_dependencies, clean=clean, sync_strategy=sync_strategy
-            )
-            if isinstance(server, Server):
+            self.uri = server.store_cls(dev_dependencies=dev_dependencies, clean=clean, sync_strategy=sync_strategy)
+            if isinstance(server, Resource):
                 if "_kwargs" in server.__dict__:
                     params = server._kwargs  # type: ignore
         else:
@@ -329,7 +316,7 @@ class Client:
 
     def _sync_to_pod(
         self,
-        server: Optional[Union[Type[Server], Server]],
+        server: Optional[Union[Type[Resource], Resource]],
         pod: V1Pod,
         namespace: str,
     ) -> None:
@@ -343,7 +330,7 @@ class Client:
         if server is None:
             raise ValueError("server cannot be None when doing a container sync")
 
-        server_path = server.server_entrypoint()
+        server_path = server._server_entrypoint()
         logging.info(f"wrote server to path: {server_path}")
         pod_name = pod.metadata.name
         copy_file_to_pod(
@@ -442,7 +429,7 @@ class Client:
                     name="POD_NAMESPACE",
                     value_from=V1EnvVarSource(field_ref=V1ObjectFieldSelector(field_path="metadata.namespace")),
                 ),
-                V1EnvVar(name="ARTIFACT_URI", value=self.uri),
+                V1EnvVar(name=OBJECT_URI_ENV, value=self.uri),
             ],
         )
         container.volume_mounts = [
@@ -499,75 +486,24 @@ class Client:
 
         return po
 
-    def info(self) -> Dict[str, Any]:
-        """Info about the server
-
-        Returns:
-            Dict[str, Any]: Server info
-        """
-        req = request.Request(f"{self.server_addr}/info")
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        return json.loads(data)
-
-    def labels(self) -> Dict[str, Any]:
-        """Labels for the server
-
-        Returns:
-            Dict[str, Any]: Server info
-        """
-        req = request.Request(f"{self.server_addr}/labels")
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        return json.loads(data)
-
-    def health(self) -> Dict[str, Any]:
-        """Health of the server
-
-        Returns:
-            Dict[str, Any]: Server health
-        """
-        req = request.Request(f"{self.server_addr}/health")
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        return json.loads(data)
-
-    def schema(self) -> Dict[str, Any]:
-        """Get OpenAPI schema for the server
-
-        Returns:
-            Dict[str, Any]: Schema of the server
-        """
-        req = request.Request(f"{self.server_addr}/schema")
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        return json.loads(data)
-
-    def load(self, dir: str = "./artifacts") -> None:
-        """Load the object
-
-        Args:
-            dir (str, optional): Directory to load from. Defaults to "./artifacts".
-        """
-
-        params = json.dumps({"dir": dir}).encode("utf8")
-        req = request.Request(f"{self.server_addr}/load", data=params, headers={"content-type": "application/json"})
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        jdict = json.loads(data)
-        logging.info(jdict)
-        return
-
     def delete(self) -> None:
-        """Delete the server"""
+        """Delete the resource"""
         self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
 
     @classmethod
-    def find(cls) -> List["Client"]:
-        """Find all the servers that could be deployed (or are running)"""
+    def find(cls, locator: ObjectLocator) -> List[str]:
+        """Find objects
+
+        Args:
+            locator (ObjectLocator): A locator of objects
+
+        Returns:
+            List[str]: A list of object uris
+        """
         raise NotImplementedError()
 
-    def k8s_uri(self) -> str:
+    @property
+    def process_uri(self) -> str:
         """K8s URI for the server
 
         Returns:
@@ -578,38 +514,41 @@ class Client:
 
         return make_k8s_uri(self.pod_name, self.pod_namespace)
 
-    def copy(self, core_v1_api: Optional[CoreV1Api] = None) -> Process:
-        """Copy the server
-
-        Args:
-            core_v1_api (Optional[CoreV1Api], optional): CoreV1Api to sue. Defaults to None.
+    def object_uri(self) -> str:
+        """URI for the object
 
         Returns:
-            RunningServer: A running server
+            str: A URI for the object
         """
-        params = json.dumps({}, cls=ShapeEncoder).encode("utf8")
-        req = request.Request(f"{self.server_addr}/copy", data=params, headers={"content-type": "application/json"})
-        resp = request.urlopen(req)
-        resp_data = resp.read().decode("utf-8")
+        return self.uri
 
-        jdict = json.loads(resp_data)
-        return Process(uri=jdict["uri"], k8s_uri=jdict["k8s_uri"])
+    def logs(self) -> Iterable[str]:
+        """Logs for the process
 
-    def save(
-        self,
-        version: Optional[str] = None,
-        core_v1_api: Optional[CoreV1Api] = None,
-    ) -> str:  # TODO: make this a generator
-        """Save the server
+        Returns:
+            Iterable[str]: A stream of logs
+        """
+        pass
+
+    def sync(self) -> None:
+        """Sync changes to a remote process"""
+        pass
+
+    def source(self) -> str:
+        """Source code for the object"""
+        pass
+
+    def store(self, dev_dependencies: bool = False, clean: bool = True) -> str:  # TODO: make this a generator
+        """Store the resource
 
         Args:
-            version (Optional[str], optional): Version to use. Defaults to repo version.
-            core_v1_api (Optional[CoreV1Api], optional): CoreV1API to use. Defaults to None.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            clean (bool, optional): Whether to clean the generated files. Defaults to True.
 
         Returns:
             str: URI of the saved server
         """
-        if core_v1_api is None:
+        if self.core_v1_api is None:
             if is_k8s_proc():
                 config.load_incluster_config()
             else:
@@ -753,8 +692,8 @@ def local(method):
     return method
 
 
-class ServerMetaClass(type):
-    """Server metaclass is the metaclass for the Server type"""
+class ResourceMetaClass(type):
+    """Resource metaclass is the metaclass for the Resource type"""
 
     def __new__(meta, classname, bases, classDict):
         newClassDict = {}
@@ -795,67 +734,58 @@ class ServerMetaClass(type):
                     ret_op = getattr(ret, "to_dict", None)
                     ser_line = ""
                     print("ret_op: ", ret_op)
-                    if callable(ret_op):
-                        ser_line = "ret = ret.to_dict()"
 
                     joined_load_lines = "\n".join(load_lines)
                     if isinstance(ret, Iterable):
+                        args = get_args(ret)
+                        print("iterable args: ", args)
+                        if len(args) == 0:
+                            raise SystemError("args for iterable are None")
+                        if len(args) > 1:
+                            raise ValueError("Iterable with args greater than one not currently supported")
+
+                        arg = args[0]
+                        arg_op = getattr(arg, "to_dict", None)
+                        if callable(arg_op):
+                            ser_line = "ret = ret.to_dict()"
+
                         req_code = f"""
-# Use websockets...
-@app.websocket_route('/stream')
-async def stream(websocket):
+async def _{attributeName}_req(self, websocket):
     update_ts()
     await websocket.accept()
 
-    # TODO: ugly hack to not deal with concurrency
-    if "client-uuid" not in websocket.headers:
-        raise ValueError("'client-uuid' must be present in headers")
-    client_uuid = websocket.headers["client-uuid"]
-    global global_client_uuid
-    if global_client_uuid == "":
-        global_client_uuid = client_uuid
-    if global_client_uuid != client_uuid:
-        raise ValueError("arc jobs currently do not support multiple clients; create another job for your client")
-
     # Process incoming messages
-    params = websocket.query_params
+    jdict = websocket.query_params
+    {joined_load_lines}
 
-    batch_size = params.get("batch_size", DEFAULT_BATCH_SIZE)
-    batch_type = params.get("batch_type", BatchType.TRAIN.value)
-
-    for x, y in job.stream(int(batch_size), BatchType(batch_type)):
-        total_start = time.time()
-        # rec = await websocket.receive_json()
-        print("prepping data")
-        x_repr = x.repr_json()
-        y_repr = y.repr_json()
-        print("sending")
-        d = {{"x": x_repr, "y": y_repr, "end": False}}
-        await websocket.send_json(d)
+    for ret in self.{attributeName}(**jdict):
+        {ser_line}
+        print("seding json")
+        await websocket.send_json(ret)
         print("sent")
-        total_end = time.time()
-        print("total loop time: ", total_end - total_start)
 
-    # reset the uid to unlock
-    global_client_uuid = ""
     print("sending end")
     await websocket.send_json({{"end": True}})
     print("all done sending data, closing socket")
     await websocket.close()
                         """
+                        routes.append(f"WebsocketRoute('/{attributeName}', endpoint=self._{attributeName}_req)")
                     else:
+                        if callable(ret_op):
+                            ser_line = "ret = ret.to_dict()"
+
                         req_code = f"""
-async def _{attributeName}_req(self, request): 
+async def _{attributeName}_req(self, request):
     jdict = await request.json()
     {joined_load_lines}
-    ret = {attributeName}(**jdict)
+    ret = self.{attributeName}(**jdict)
     {ser_line}
     return JSONResponse(ret)
 """
+                        routes.append(f"Route('/{attributeName}', endpoint=self._{attributeName}_req)")
                     print("req code: ", req_code)
                     exec(req_code)
                     newClassDict[f"_{attributeName}_req"] = eval(f"_{attributeName}_req")
-                    routes.append(f"Route('/{attributeName}', endpoint=self._{attributeName}_req)")
             newClassDict[attributeName] = attribute
 
         routes_joined = ", ".join(routes)
@@ -865,29 +795,51 @@ def _routes(self) -> List[Route]:
 """
         print("route code: ", route_code)
         exec(route_code)
-        newClassDict["_routes"] = _routes  # noqa: F821
+        newClassDict["_routes"] = _routes  # type: ignore # noqa: F821
         return type.__new__(meta, classname, bases, newClassDict)
 
 
-class CombinedMeta(ServerMetaClass, ABCMeta):
+class CombinedMeta(ResourceMetaClass, ABCMeta):
     pass
 
 
-S = TypeVar("S", bound="Server")
+@dataclass
+class Lock:
+    """Time the lock was created"""
+
+    created: float
+
+    """Key associated with the lock"""
+    key: Optional[str] = None
+
+    """Timout when the lock will expire"""
+    timeout: Optional[int] = None
+
+    def is_expired(self) -> bool:
+        if self.timeout is None:
+            return False
+
+        if (time.time() - self.created) > self.timeout:
+            return True
+        return False
 
 
-# TODO: can we get rid or APIUtil??
-# should this be an actor?
-class Server(ABC, APIUtil, metaclass=CombinedMeta):
-    """A server that can be built and ran remotely"""
+R = TypeVar("R", bound="Resource")
+
+
+# TODO: can we get rid or APIUtil?
+class Resource(Kind, APIUtil, metaclass=CombinedMeta):
+    """A resource that can be built and ran remotely over HTTP"""
 
     last_used_ts: float
-    scm: SCM
     schemas: SchemaGenerator
+
+    scm: SCM = SCM()
+    _lock: Optional[Lock] = None
 
     @local
     @classmethod
-    def from_env(cls: Type[S]) -> S:
+    def from_env(cls: Type[R]) -> R:
         """Create the server from the environment, it will look for a saved artifact,
         a config.json, or command line arguments
 
@@ -912,7 +864,7 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
 
         if artifact_file.is_file():
             logging.info("loading srv artifact found locally")
-            srv: S = cls.load()
+            srv: R = cls.load()
         elif cfg_file.is_file():
             if opts is None:
                 logging.info("no local artifact, config, or args found. Creating vanilla class without parameters")
@@ -947,7 +899,7 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
 
     @classmethod
     def name(cls) -> str:
-        """Name of the server
+        """Name of the resource
 
         Returns:
             str: Name of the server
@@ -956,7 +908,7 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
 
     @classmethod
     def short_name(cls) -> str:
-        """Short name for the server
+        """Short name for the resource
 
         Returns:
             str: A short name
@@ -965,7 +917,7 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
 
     @classmethod
     def base_names(cls) -> List[str]:
-        """Bases for the server
+        """Bases for the resource
 
         Raises:
             SystemError: Server bases
@@ -976,29 +928,24 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
         bases = inspect.getmro(cls)
         base_names: List[str] = []
         for base in bases:
-            if isinstance(base, Server):
+            if isinstance(base, Resource):
                 base_names.append(base.__name__)
         return base_names
 
-    def _info_req(self, request):
-        return JSONResponse(
-            {
-                "name": self.__class__.__name__,
-                "version": self.scm.sha(),
-                "env-sha": self.scm.env_sha(),
-                "uri": self.uri,
-            }
-        )
+    def info(self) -> Dict[str, Any]:
+        return {
+            "name": self.__class__.__name__,
+            "version": self.scm.sha(),
+            "env-sha": self.scm.env_sha(),
+            "uri": self.uri,
+        }
 
-    def _health_req(self, request):
-        return JSONResponse({"health": "ok"})
-
-    def _labels_req(self, request):
-        return JSONResponse(self.labels())
+    def health(self) -> Dict[str, Any]:
+        return {"health": "ok"}
 
     @classmethod
-    def labels(cls, scm: Optional[SCM] = None) -> Dict[str, Any]:
-        """Labels for the server
+    def labels(cls) -> Dict[str, Any]:
+        """Labels for the resource
 
         Args:
             scm (Optional[SCM], optional): SCM to use. Defaults to None.
@@ -1006,48 +953,139 @@ class Server(ABC, APIUtil, metaclass=CombinedMeta):
         Returns:
             Dict[str, Any]: Labels for the server
         """
-        if scm is None:
-            scm = SCM()
         base_names = cls.base_names()
 
         base_labels = {
             BASES_LABEL: json.dumps(base_names),
             NAME_LABEL: cls.__name__,
-            VERSION_LABEL: scm.sha(),
+            VERSION_LABEL: cls.scm.sha(),
             PARAMS_SCHEMA_LABEL: json.dumps(cls.opts_schema()),
-            ENV_SHA_LABEL: scm.env_sha(),
-            REPO_NAME_LABEL: scm.name(),
-            REPO_SHA_LABEL: scm.sha(),
+            ENV_SHA_LABEL: cls.scm.env_sha(),
+            REPO_NAME_LABEL: cls.scm.name(),
+            REPO_SHA_LABEL: cls.scm.sha(),
         }
         return base_labels
 
-    def _routes(self) -> List[Route]:
-        """Routes to add to the server
+    @property
+    def process_uri(self) -> str:
+        """K8s URI for the process
 
         Returns:
-            List[Route]: List of routes to add to the server
+            str: K8s URI for the server
         """
-        routes = [
-            Route("/info", endpoint=self._info_req, methods=["GET"]),
-            Route("/health", endpoint=self._health_req, methods=["GET"]),
-            Route("/schema", endpoint=self._schema_req, methods=["GET"]),
-            Route("/labels", endpoint=self._labels_req, methods=["GET"]),
-        ]
+        name = os.getenv("POD_NAME")
+        namespace = os.getenv("POD_NAMESPACE")
+        if name is None or namespace is None:
+            return f"local://{os.getpid()}"
+        return make_k8s_uri(name, namespace)
 
-        return routes
+    @property
+    def object_uri(self) -> str:
+        """URI for the object
+
+        Returns:
+            str: A URI for the object
+        """
+        uri = os.getenv(OBJECT_URI_ENV)
+        if uri is None:
+            return make_py_uri(self)
+        return uri
+
+    def lock(self, key: Optional[str] = None, timeout: Optional[int] = None) -> None:
+        """Lock the process to only operate with the caller
+
+        Args:
+            key (Optional[str], optional): An optional key to secure the lock
+            timeout (Optional[int], optional): Whether to unlock after a set amount of time. Defaults to None.
+        """
+        if self._lock is not None and not self._lock.is_expired():
+            raise SystemError(f"lock already exists: {self._lock}")
+        self._lock = Lock(
+            time.time(),
+            key,
+            timeout,
+        )
+        return
+
+    def unlock(self, key: Optional[str] = None, force: bool = False) -> None:
+        """Unlock the kind
+
+        Args:
+            key (Optional[str], optional): Key to unlock, if needed. Defaults to None.
+            force (bool, optional): Force unlock without a key. Defaults to False.
+        """
+        if self._lock is None:
+            return
+        elif self._lock.is_expired():
+            self._lock = None
+        elif self._lock.key is None:
+            self._lock = None
+        else:
+            if self._lock.key == key:
+                self._lock = None
+            elif force is True:
+                self._lock = None
+            else:
+                raise ValueError("lock requires a key to unlock, or force")
+        return
+
+    def logs(self) -> Iterable[str]:
+        """Logs for the resource
+
+        Returns:
+            Iterable[str]: A stream of logs
+        """
+        raise NotImplementedError()
+
+    def diff(self, uri: str) -> str:
+        """Diff of the given object from the URI
+
+        Args:
+            uri (str): URI to diff
+
+        Returns:
+            str: A diff
+        """
+        raise NotImplementedError()
+
+    def merge(self, uri: str) -> R:
+        """Merge with the given resource
+
+        Args:
+            uri (str): Resource to merge with
+
+        Returns:
+            Resource: A Resource
+        """
+        raise NotImplementedError()
+
+    def sync(self) -> None:
+        """Sync changes to a remote process"""
+        # TODO: does this make sense?
+        raise NotImplementedError("this method only works on client objects")
+
+    def source(self) -> str:
+        """Source code for the object"""
+        pass
 
     @classmethod
     def client_cls(cls) -> Type[Client]:
-        """Class of the client for the server
+        """Class of the client for the resource
 
         Returns:
             Type[Client]: A client class for the server
         """
-        return Client
+        mod = importlib.import_module(f".{cls._client_file_name()}", package=__name__)  # noqa: F841
+        print("mod: ", mod)
+        # exec(f"from .{cls._client_file_name()} import {cls.__name__}Client")
+        loc_copy = locals().copy()
+        print("loc copy: ", loc_copy)
+        client_cls: Type[Client] = eval(f"mod.{cls.__name__}Client", loc_copy)
+        print("client cls: ", client_cls)
+        return client_cls
 
-    @local
     @classmethod
-    def server_entrypoint(cls, scm: Optional[SCM] = None, num_workers: int = 1) -> str:
+    def _server_entrypoint(cls, scm: Optional[SCM] = None, num_workers: int = 1) -> str:
         """Generate entrypoint for the server
 
         Args:
@@ -1086,7 +1124,7 @@ logging.info("creating object")
 srv = {cls.__name__}.from_env()
 
 logging.info("creating app")
-app = srv.server_app()
+app = srv._server_app()
 
 if __name__ == "__main__":
     pkgs = srv._reload_dirs()
@@ -1121,7 +1159,7 @@ if __name__ == "__main__":
         return
 
     @classmethod
-    def load(cls: Type[S], dir: str = "./artifacts") -> S:
+    def load(cls: Type[R], dir: str = "./artifacts") -> R:
         """Load the object
 
         Args:
@@ -1179,15 +1217,14 @@ if __name__ == "__main__":
     def _update_ts(self):
         self.last_used_ts = time.time()
 
-    @local
     def deploy(
-        self,
+        self: R,
         scm: Optional[SCM] = None,
         clean: bool = True,
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
         **kwargs,
-    ) -> Client:
+    ) -> R:
         """Create a deployment of the class, which will allow for the generation of instances remotely
 
         Args:
@@ -1200,25 +1237,21 @@ if __name__ == "__main__":
             Client: A client for the server
         """
 
-        imgid = self.base_image(scm, clean, dev_dependencies)
+        imgid = self.store_cls(scm, clean, dev_dependencies)
         return self.client_cls()(  # type: ignore
             uri=imgid, sync_strategy=sync_strategy, clean=clean, scm=scm, dev_dependencies=dev_dependencies, **kwargs
         )
 
-    @local
-    @classmethod
     def develop(
-        self,
-        scm: Optional[SCM] = None,
+        self: R,
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
         **kwargs,
-    ) -> Client:
+    ) -> R:
         """Create a deployment of the class, and sync local code to it
 
         Args:
-            scm (Optional[SCM], optional): SCM to use. Defaults to None.
             clean (bool, optional): Whether to clean generated files. Defaults to True.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             reuse (bool, optional): Whether to reuse existing running servers. Defaults to True.
@@ -1232,15 +1265,14 @@ if __name__ == "__main__":
             clean=clean,
             reuse=reuse,
             dev_dependencies=dev_dependencies,
-            scm=scm,
+            scm=self.scm,
             **kwargs,
         )
 
     @local
     @classmethod
-    def base_image(
+    def store_cls(
         cls,
-        scm: Optional[SCM] = None,
         clean: bool = True,
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
@@ -1248,7 +1280,6 @@ if __name__ == "__main__":
         """Create an image from the server class that can be used to create servers from scratch
 
         Args:
-            scm (Optional[SCM], optional): SCM to use. Defaults to None.
             clean (bool, optional): Whether to clean generated files. Defaults to True.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
@@ -1257,14 +1288,12 @@ if __name__ == "__main__":
             str: URI for the image
         """
 
-        return cls.build_image(scm=scm, clean=clean, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
+        return cls._build_image(clean=clean, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
 
-    @local
-    def image(self, scm: Optional[SCM] = None, dev_dependencies: bool = False, clean: bool = True) -> str:
+    def store(self, dev_dependencies: bool = False, clean: bool = True) -> str:
         """Create a server image with the saved artifact
 
         Args:
-            scm (Optional[SCM], optional): SCM to use. Defaults to None.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             clean (bool, optional): Whether to clean the generated files. Defaults to True.
 
@@ -1272,13 +1301,9 @@ if __name__ == "__main__":
             str: URI for the image
         """
 
-        if scm is None:
-            scm = SCM()
-
         self.save()
 
-        uri = self.build_image(
-            scm=scm,
+        uri = self._build_image(
             clean=clean,
             dev_dependencies=dev_dependencies,
             sync_strategy=RemoteSyncStrategy.IMAGE,
@@ -1288,12 +1313,10 @@ if __name__ == "__main__":
 
         return uri
 
-    @local
     @classmethod
-    def build_image(
+    def _build_image(
         cls,
         labels: Optional[Dict[str, str]] = None,
-        scm: Optional[SCM] = None,
         clean: bool = True,
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
@@ -1302,7 +1325,6 @@ if __name__ == "__main__":
 
         Args:
             labels (Optional[Dict[str, str]], optional): Labels to add. Defaults to None.
-            scm (Optional[SCM], optional): SCM to use. Defaults to None.
             clean (bool, optional): Whether to clean generated files. Defaults to True.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
@@ -1311,11 +1333,9 @@ if __name__ == "__main__":
             str: URI of the image
         """
 
-        if scm is None:
-            scm = SCM()
         # write the server file somewhere we can find it
-        server_filepath = Path(cls.server_entrypoint())
-        repo_root = Path(str(scm.git_repo.working_dir))
+        server_filepath = Path(cls._server_entrypoint())
+        repo_root = Path(str(cls.scm.git_repo.working_dir))
         root_relative = server_filepath.relative_to(repo_root)
         container_path = Path(REPO_ROOT).joinpath(root_relative)
 
@@ -1338,7 +1358,7 @@ if __name__ == "__main__":
             imgid = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,  # TODO: fix this at the source, we want to copy all files now
                 command=img_command(str(container_path)),
-                tag=f"{cls.short_name().lower()}-env-{scm.env_sha()}",
+                tag=f"{cls.short_name().lower()}-env-{cls.scm.env_sha()}",
                 labels=base_labels,
                 dev_dependencies=dev_dependencies,
                 clean=clean,
@@ -1349,7 +1369,7 @@ if __name__ == "__main__":
         return str(imgid)
 
     @classmethod
-    def from_opts(cls: Type[S], opts: Type[Serializable]) -> S:
+    def from_opts(cls: Type[R], opts: Type[Serializable]) -> R:
         """Load server from Opts
 
         Args:
@@ -1362,7 +1382,7 @@ if __name__ == "__main__":
         return cls(**opts.__dict__)
 
     @local
-    def server_app(self) -> Starlette:
+    def _server_app(self) -> Starlette:
         """Starlette server app
 
         Returns:
@@ -1393,7 +1413,7 @@ if __name__ == "__main__":
             log_level (str, optional): Log level. Defaults to "info".
             reload (bool, optional): Whether to hot reload. Defaults to True.
         """
-        app = self.server_app()
+        app = self._server_app()
 
         pkgs = self._reload_dirs()
 
@@ -1412,9 +1432,7 @@ if __name__ == "__main__":
         return self.schemas.OpenAPIResponse(request=request)
 
     @classmethod
-    def versions(
-        cls: Type["Server"], repositories: Optional[List[str]] = None, cfg: Optional[Config] = None
-    ) -> List[str]:
+    def versions(cls: Type[R], repositories: Optional[List[str]] = None, cfg: Optional[Config] = None) -> List[str]:
         """Find all versions of this type
 
         Args:
@@ -1446,7 +1464,7 @@ if __name__ == "__main__":
 
     @local
     @classmethod
-    def gen_client(cls) -> str:
+    def _gen_client(cls) -> str:
         """Generate a client for the server
 
         Returns:
@@ -1456,7 +1474,7 @@ if __name__ == "__main__":
         print("fns: ", fns)
         params: List[str] = []
         methods: List[str] = []
-        imports: List[str] = []
+        # imports: List[str] = []
         for name, fn in fns:
             if name.startswith("_"):
                 continue
@@ -1526,10 +1544,46 @@ if __name__ == "__main__":
 
             params_joined = ",".join(params)
 
-            client_fn = f"""
+            if isinstance(ret, Iterable):
+                client_fn = f"""
+    def {name}{sig}:
+        server_addr = f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes:{SERVER_PORT}"
+
+        # you need to create your own socket here
+        sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", SERVER_PORT))
+        if self.uid is None:
+            self.uid = uuid.uuid4()
+        
+        encoded = parse.urlencode({{{params_joined}}})
+        ws = create_connection(
+            f"ws://{{server_addr}}/{name}?{{encoded}}",
+            header=[f"client-uuid: {{self.uid}}"],
+            socket=sock,
+        )
+        try:
+            while True:
+                _, data = ws.recv_data()
+
+                jdict = json.loads(data)
+                end = jdict["end"]
+                if end:
+                    break
+                {ser_line}
+                yield ret
+
+        except Exception as e:
+            print("stream exception: ", e)
+            raise e
+"""
+            else:
+                client_fn = f"""
     def {name}{sig}:
         params = json.dumps({{{params_joined}}}).encode("utf8")
-        req = request.Request(f"{{self.server_addr}}/{name}", data=params, headers={{"content-type": "application/json"}})
+        req = request.Request(
+            f"{{self.server_addr}}/{name}",
+            data=params,
+            headers={{"content-type": "application/json"}}
+        )
         resp = request.urlopen(req)
         data = resp.read().decode("utf-8")
         jdict = json.loads(data)
@@ -1541,7 +1595,7 @@ if __name__ == "__main__":
         imports_joined = "\n".join(import_statements.keys())
         methods_joined = "\n".join(methods)
         client_file = f"""
-from urllib import request
+from urllib import request, parse
 import json
 import logging
 
@@ -1560,7 +1614,7 @@ class {cls.__name__}Client(Client):
 
     @local
     @classmethod
-    def write_client_file(cls) -> None:
+    def _write_client_file(cls) -> None:
         """Generate and write the client file next to the current one"""
         with open(f"{cls._client_file_name}.py", "w", encoding="utf-8") as f:
-            f.write(cls.gen_client())
+            f.write(cls._gen_client())

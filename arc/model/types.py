@@ -568,10 +568,8 @@ class SupervisedModelClient(Generic[X, Y], Client):
                     OWNER_LABEL: get_client_id(),
                     MODEL_X_DATA_LABEL: img_labels[MODEL_X_DATA_LABEL],
                     MODEL_Y_DATA_LABEL: img_labels[MODEL_Y_DATA_LABEL],
-                    MODEL_SERVER_PATH_LABEL: img_labels[MODEL_SERVER_PATH_LABEL],
-                    MODEL_X_DATA_SCHEMA_LABEL: self.model_x_schema,
-                    MODEL_Y_DATA_SCHEMA_LABEL: self.model_y_schema,
-                    MODEL_PARAMS_SCHEMA_LABEL: self.model_params_schema,
+                    SERVER_PATH_LABEL: img_labels[MODEL_SERVER_PATH_LABEL],
+                    PARAMS_SCHEMA_LABEL: self.params_schema,
                 },
             ),
             spec=spec,
@@ -579,8 +577,10 @@ class SupervisedModelClient(Generic[X, Y], Client):
         core_v1_api.create_namespaced_pod(namespace, po)
         return pod_name
 
-    def get_labels(self) -> Dict[str, Any]:
-
+    def labels(self) -> Dict[str, Any]:
+        return {
+            "a": "b"
+        }
 
     def validate(self) -> None:
         """Validate the client and server schema are compatible"""

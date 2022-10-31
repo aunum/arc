@@ -1,9 +1,12 @@
 import typer
 
+app = typer.Typer(name="arc")
 
-def main(name: str):
-    print(f"Hello {name}")
+
+@app.command()
+def run(path: str):
+    print(f"Hello {path}")
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()

@@ -28,33 +28,6 @@ class Bar(Server):
         self.a = a
         self.b = b
 
-    # @classmethod
-    # def client_cls(cls) -> Type[Client]:
-    #     """Class of the client for the server
-
-    #     Returns:
-    #         Type[Client]: A client class for the server
-    #     """
-    #     return BarClient
-
-    # def routes(self) -> List[Route]:
-    #     """Routes to add to the server
-
-    #     Returns:
-    #         List[Route]: List of routes to add to the server
-    #     """
-    #     base_routes = super().routes()
-    #     base_routes.extend(
-    #         [
-    #             Route("/echo", endpoint=self._echo_req),
-    #         ]
-    #     )
-    #     return base_routes
-
-    # async def _echo_req(self, request):
-    #     jdict = await request.json()
-    #     return JSONResponse({"message": self.echo(jdict["txt"])})
-
     def echo(self, txt: str) -> str:
         """Echo a string back
 
@@ -101,28 +74,8 @@ class Bar(Server):
         for i in range(num):
             yield f"{i}: {a}"
 
-    def __dir__(self):
-        return super().__dir__() + [str(k) for k in self.keys()]
-
-
-class BarClient(Client):
-    """A Bar client"""
-
-    # def echo(self, txt: str) -> str:
-    #     """Echo the message
-
-    #     Args:
-    #         txt (str): Message to echo
-
-    #     Returns:
-    #         str: Echoed message with a hello
-    #     """
-    #     params = json.dumps({"txt": txt}).encode("utf8")
-    #     req = request.Request(f"{self.server_addr}/echo", data=params, headers={"content-type": "application/json"})
-    #     resp = request.urlopen(req)
-    #     data = resp.read().decode("utf-8")
-    #     dict = json.loads(data)
-    #     return dict["message"]
+    # def __dir__(self):
+    #     return super().__dir__() + [str(k) for k in self.keys()]
 
 
 if __name__ == "__main__":
