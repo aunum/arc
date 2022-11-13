@@ -1,12 +1,15 @@
 from __future__ import annotations
+import collections
 from dataclasses import dataclass
+from faulthandler import is_enabled
 import shutil
+from types import NoneType
 from urllib import request
 import json
 import socket
 from abc import ABCMeta
 from simple_parsing import ArgumentParser
-from typing import Dict, Iterable, List, Any, Optional, Type, TypeVar, Union, get_args, get_type_hints
+from typing import Dict, Iterable, List, Any, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 import typing
 import inspect
 import time
@@ -17,8 +20,9 @@ from pathlib import Path
 import uuid
 from functools import wraps
 from types import FunctionType
-from inspect import signature
+from inspect import Parameter, signature
 import importlib
+import collections.abc
 
 from starlette.applications import Starlette
 from starlette.schemas import SchemaGenerator
@@ -57,6 +61,7 @@ from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
 from typing_inspect import is_generic_type
+from black import format_str, FileMode
 
 from arc.kube.sync import copy_file_to_pod
 from arc.image.client import default_socket
@@ -90,7 +95,6 @@ PARAMS_SCHEMA_LABEL = "params-schema"
 SERVER_PATH_LABEL = "server-path"
 URI_LABEL = "uri"
 OWNER_LABEL = "owner"
-SERVER_PORT = "8080"
 CONFIG_FILE_NAME = "config.json"
 BUILD_MNT_DIR = "/mnt/build"
 ARTIFACT_TYPE_LABEL = "artifact-type"
@@ -113,6 +117,11 @@ class Client(Kind):
     artifact_labels: Dict[str, Any]
     core_v1_api: CoreV1Api
     rbac_v1_api: RbacAuthorizationV1Api
+    uid: uuid.UUID
+    server_port: str
+    server_addr: str
+    pod_name: str
+    pod_namespace: str
     scm: SCM
     cfg: Config
     docker_socket: str
@@ -176,6 +185,9 @@ class Client(Kind):
 
         if namespace is None:
             namespace = cfg.kube_namespace
+
+        if self.uid is None:
+            self.uid = uuid.uuid4()
 
         self._patch_socket(core_v1_api)
 
@@ -243,6 +255,7 @@ class Client(Kind):
         # TODO: handle readiness https://github.com/aunum/arc/issues/11
         time.sleep(10)
 
+        self.server_port = SERVER_PORT
         self.server_addr = f"http://{pod_name}.pod.{namespace}.kubernetes:{SERVER_PORT}"
         self.pod_name = pod_name
         self.pod_namespace = namespace
@@ -486,6 +499,23 @@ class Client(Kind):
 
         return po
 
+    @classmethod
+    def base_names(cls) -> List[str]:
+        """Bases for the resource
+
+        Raises:
+            SystemError: Server bases
+
+        Returns:
+            List[str]: Bases of the server
+        """
+        bases = inspect.getmro(cls)
+        base_names: List[str] = []
+        for base in bases:
+            if isinstance(base, Resource):
+                base_names.append(base.__name__)
+        return base_names
+
     def delete(self) -> None:
         """Delete the resource"""
         self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
@@ -529,6 +559,23 @@ class Client(Kind):
             Iterable[str]: A stream of logs
         """
         pass
+
+    def copy(self) -> PID:
+        """Copy the process
+
+        Returns:
+            PID: A process ID
+        """
+        raise NotImplementedError()
+
+    @classmethod
+    def schema(cls) -> str:
+        """Schema of the object
+
+        Returns:
+            str: Object schema
+        """
+        raise NotImplementedError()
 
     def sync(self) -> None:
         """Sync changes to a remote process"""
@@ -692,6 +739,12 @@ def local(method):
     return method
 
 
+def nolock(method):
+    """Do not lock this method"""
+    method.nolock = True
+    return method
+
+
 class ResourceMetaClass(type):
     """Resource metaclass is the metaclass for the Resource type"""
 
@@ -700,6 +753,7 @@ class ResourceMetaClass(type):
         routes: List[str] = []
 
         for attributeName, attribute in classDict.items():
+            print("============ ", attributeName)
             if isinstance(attribute, FunctionType):
                 if hasattr(attribute, "local"):
                     print("!!! ignoring: ", attributeName)
@@ -710,8 +764,10 @@ class ResourceMetaClass(type):
 
                 if attributeName == "__init__":
                     attribute = init_wrapper(attribute)
+
                 elif not attributeName.startswith("_"):
                     print("attribute: ", attribute)
+                    print("type attr: ", type(attribute))
                     print("sig: ", signature(attribute))
                     print("sig params: ", signature(attribute).parameters)
                     load_lines = []
@@ -737,6 +793,7 @@ class ResourceMetaClass(type):
 
                     joined_load_lines = "\n".join(load_lines)
                     if isinstance(ret, Iterable):
+                        print("is iterable!")
                         args = get_args(ret)
                         print("iterable args: ", args)
                         if len(args) == 0:
@@ -751,7 +808,6 @@ class ResourceMetaClass(type):
 
                         req_code = f"""
 async def _{attributeName}_req(self, websocket):
-    update_ts()
     await websocket.accept()
 
     # Process incoming messages
@@ -770,7 +826,9 @@ async def _{attributeName}_req(self, websocket):
     await websocket.close()
                         """
                         routes.append(f"WebsocketRoute('/{attributeName}', endpoint=self._{attributeName}_req)")
+
                     else:
+                        print("is NOT iterable")
                         if callable(ret_op):
                             ser_line = "ret = ret.to_dict()"
 
@@ -783,9 +841,11 @@ async def _{attributeName}_req(self, request):
     return JSONResponse(ret)
 """
                         routes.append(f"Route('/{attributeName}', endpoint=self._{attributeName}_req)")
+
                     print("req code: ", req_code)
                     exec(req_code)
                     newClassDict[f"_{attributeName}_req"] = eval(f"_{attributeName}_req")
+                    print("new class dict: ", newClassDict)
             newClassDict[attributeName] = attribute
 
         routes_joined = ", ".join(routes)
@@ -795,33 +855,75 @@ def _routes(self) -> List[Route]:
 """
         print("route code: ", route_code)
         exec(route_code)
-        newClassDict["_routes"] = _routes  # type: ignore # noqa: F821
+        newClassDict["_routes"] = eval("_routes")  # type: ignore # noqa: F821
         return type.__new__(meta, classname, bases, newClassDict)
 
 
-class CombinedMeta(ResourceMetaClass, ABCMeta):
+def is_optional(field):
+    return typing.get_origin(field) is Union and type(None) in typing.get_args(field)
+
+
+def is_iterable_cls(t: Type) -> bool:
+    if t == collections.abc.Iterable:
+        return True
+
+    orig = get_origin(t)
+    if orig is not None:
+        if orig == collections.abc.Iterable:
+            return True
+
+    return False
+
+
+# class CombinedMeta(ResourceMetaClass, ABCMeta):
+#     pass
+
+
+class CombinedMeta(ABCMeta):
     pass
 
 
 @dataclass
 class Lock:
+    created: float
     """Time the lock was created"""
 
-    created: float
-
-    """Key associated with the lock"""
     key: Optional[str] = None
+    """Key associated with the lock"""
 
-    """Timout when the lock will expire"""
     timeout: Optional[int] = None
+    """Timout when the lock will expire"""
 
     def is_expired(self) -> bool:
+        """Check whether the lock has expired
+
+        Returns:
+            bool: Whether the lock has expired
+        """
         if self.timeout is None:
             return False
 
         if (time.time() - self.created) > self.timeout:
             return True
         return False
+
+    def try_unlock(self, key: str) -> None:
+        """Try to unlock the lock with a key
+
+        Raises:
+            SystemError: If it can't be unlocked
+        """
+
+        if self.key is None:
+            return None
+
+        if self.is_expired():
+            return None
+
+        if self.key == key:
+            return None
+
+        raise SystemError("Resource is locked and key provided is denied")
 
 
 R = TypeVar("R", bound="Resource")
@@ -897,6 +999,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
 
         return srv
 
+    @nolock
     @classmethod
     def name(cls) -> str:
         """Name of the resource
@@ -906,6 +1009,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         """
         return cls.__name__
 
+    @nolock
     @classmethod
     def short_name(cls) -> str:
         """Short name for the resource
@@ -915,7 +1019,8 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         """
         return cls.__name__.lower()
 
-    @classmethod
+    @nolock
+    @classmethod  # I need to solve class methods now :()
     def base_names(cls) -> List[str]:
         """Bases for the resource
 
@@ -932,7 +1037,13 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
                 base_names.append(base.__name__)
         return base_names
 
+    @nolock
     def info(self) -> Dict[str, Any]:
+        """Info about the resource
+
+        Returns:
+            Dict[str, Any]: Resource info
+        """
         return {
             "name": self.__class__.__name__,
             "version": self.scm.sha(),
@@ -940,9 +1051,32 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
             "uri": self.uri,
         }
 
+    @nolock
     def health(self) -> Dict[str, Any]:
+        """Health of the resource
+
+        Returns:
+            Dict[str, Any]: Resource health
+        """
         return {"health": "ok"}
 
+    def delete(self) -> None:
+        """Delete the resource"""
+        raise NotImplementedError()
+
+    @classmethod
+    def find(cls, locator: ObjectLocator) -> List[str]:
+        """Find objects
+
+        Args:
+            locator (ObjectLocator): A locator of objects
+
+        Returns:
+            List[str]: A list of object uris
+        """
+        raise NotImplementedError()
+
+    @nolock
     @classmethod
     def labels(cls) -> Dict[str, Any]:
         """Labels for the resource
@@ -991,6 +1125,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
             return make_py_uri(self)
         return uri
 
+    @nolock
     def lock(self, key: Optional[str] = None, timeout: Optional[int] = None) -> None:
         """Lock the process to only operate with the caller
 
@@ -1007,6 +1142,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         )
         return
 
+    @nolock
     def unlock(self, key: Optional[str] = None, force: bool = False) -> None:
         """Unlock the kind
 
@@ -1064,9 +1200,26 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         # TODO: does this make sense?
         raise NotImplementedError("this method only works on client objects")
 
+    def copy(self) -> PID:
+        """Copy the process
+
+        Returns:
+            PID: A process ID
+        """
+        raise NotImplementedError()
+
     def source(self) -> str:
         """Source code for the object"""
         pass
+
+    @classmethod
+    def schema(cls) -> str:
+        """Schema of the object
+
+        Returns:
+            str: Object schema
+        """
+        raise NotImplementedError()
 
     @classmethod
     def client_cls(cls) -> Type[Client]:
@@ -1075,7 +1228,15 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         Returns:
             Type[Client]: A client class for the server
         """
-        mod = importlib.import_module(f".{cls._client_file_name()}", package=__name__)  # noqa: F841
+        # TODO: need to generate this
+        print("writing client file...")
+        cls._write_client_file()
+
+        print("\n================\n####################\n================\n")
+        print("writing server file")
+        cls._write_server_file()
+
+        mod = importlib.import_module(f".{cls._client_file_name()}", package=__package__)  # noqa: F841
         print("mod: ", mod)
         # exec(f"from .{cls._client_file_name()} import {cls.__name__}Client")
         loc_copy = locals().copy()
@@ -1217,14 +1378,18 @@ if __name__ == "__main__":
     def _update_ts(self):
         self.last_used_ts = time.time()
 
+    def notebook(self) -> None:
+        """Launch a notebook for the object"""
+        raise NotImplementedError()
+
     def deploy(
-        self: R,
+        self: Resource,
         scm: Optional[SCM] = None,
         clean: bool = True,
         dev_dependencies: bool = False,
         sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
         **kwargs,
-    ) -> R:
+    ) -> Resource:
         """Create a deployment of the class, which will allow for the generation of instances remotely
 
         Args:
@@ -1243,12 +1408,12 @@ if __name__ == "__main__":
         )
 
     def develop(
-        self: R,
+        self: Resource,
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
         **kwargs,
-    ) -> R:
+    ) -> Resource:
         """Create a deployment of the class, and sync local code to it
 
         Args:
@@ -1404,6 +1569,27 @@ if __name__ == "__main__":
 
         return pkgs
 
+    def _check_lock(self, headers: Dict[str, Any]) -> str:
+        """Check if the servers locked
+
+        Args:
+            headers (Dict[str, Any]): Headers in the request
+
+        Raises:
+            ValueError: if locked
+
+        Returns:
+            str: The client UUID
+        """
+        if "client-uuid" not in headers:
+            raise ValueError("'client-uuid' must be present in headers")
+        client_uuid = headers["client-uuid"]
+        if self._lock is None:
+            return client_uuid
+
+        self._lock.try_unlock(client_uuid)
+        return client_uuid
+
     @local
     def serve(self, port: int = 8080, log_level: str = "info", reload: bool = True) -> None:
         """Serve the class
@@ -1462,7 +1648,169 @@ if __name__ == "__main__":
                     ret.append(f"{repo_uri}:{tag}")
         return ret
 
-    @local
+    @classmethod
+    def _gen_server(cls) -> str:
+        routes: List[str] = []
+        methods: List[str] = []
+        import_statements: Dict[str, Any] = {}
+
+        fns = inspect.getmembers(cls, predicate=inspect.isfunction)
+        for name, fn in fns:
+            print("fn: ", fn)
+            print("type fn: ", type(fn))
+
+            sig = signature(fn, eval_str=True, follow_wrapped=True)
+
+            if hasattr(fn, "local"):
+                print("!!! ignoring: ", name)
+                continue
+
+            if name.startswith("__"):
+                continue
+
+            if name.startswith("_"):
+                continue
+
+            load_lines = []
+            for k in sig.parameters:
+                print("k", k)
+                if k == "self":
+                    continue
+                param = sig.parameters[k]
+                print("param annot: ", param.annotation)
+                _op = getattr(param.annotation, "from_dict", None)
+                print("_op: ", _op)
+                if callable(_op):
+                    print("!!!! callable")
+                    load_lines.append(f"jdict['{k}'] = {param.annotation.__name__}.from_dict(jdict['{k}'])")
+
+            hints = get_type_hints(fn)
+            ret = hints["return"]
+
+            ser_line = "if hasattr(ret, '__dict__'): ret = ret.__dict__"
+
+            is_iterable = is_iterable_cls(ret)
+            if is_iterable:
+                print("is iterable!")
+                args = get_args(ret)
+                print("iterable args: ", args)
+                if len(args) == 0:
+                    raise SystemError("args for iterable are None")
+                if len(args) > 1:
+                    raise ValueError("Iterable with args greater than one not currently supported")
+
+                ret = args[0]
+
+            if ret == NoneType:
+                ser_line = "ret = {'response': None}"
+            if ret in [int, list, str, float, bool]:
+                ser_line = "ret = {'response': ret}"
+            if ret == dict:
+                ser_line = ""
+
+            if hasattr(ret, "__origin__"):
+                orig = ret.__origin__
+                if orig == dict:
+                    ser_line = ""
+            if hasattr(ret, "to_dict"):
+                ser_line = "ret = ret.to_dict()"
+
+            ret_op = getattr(ret, "to_dict", None)
+
+            joined_load_lines = "\n".join(load_lines)
+            if is_iterable:
+                req_code = f"""
+    async def _{name}_req(self, websocket):
+        await websocket.accept()
+        self._check_lock(websocket.headers)
+
+        # Process incoming messages
+        jdict = websocket.query_params
+        {joined_load_lines}
+        for ret in self.{name}(**jdict):
+            {ser_line}
+            print("seding json")
+            await websocket.send_json(ret)
+            print("sent")
+
+        print("sending end")
+        await websocket.send_json({{"end": True}})
+        print("all done sending data, closing socket")
+        await websocket.close()
+                """
+                methods.append(req_code)
+                routes.append(f"WebSocketRoute('/{name}', endpoint=self._{name}_req)")
+
+            else:
+                print("is NOT iterable")
+                if callable(ret_op):
+                    ser_line = "ret = ret.to_dict()"
+
+                req_code = f"""
+    async def _{name}_req(self, request):
+        jdict = await request.json()
+        self._check_lock(request.headers)
+        {joined_load_lines}
+        ret = self.{name}(**jdict)
+        {ser_line}
+        return JSONResponse(ret)
+"""
+                methods.append(req_code)
+                routes.append(f"Route('/{name}', endpoint=self._{name}_req)")
+
+            print("req code: ", req_code)
+
+        routes_joined = ", ".join(routes)
+        route_code = f"""
+    def _routes(self) -> List[BaseRoute]:
+        return [{routes_joined}]
+"""
+        print("route code: ", route_code)
+        methods.append(route_code)
+
+        cls_file_path = Path(inspect.getfile(cls))
+        cls_file = cls_file_path.stem
+
+        imports_joined = "\n".join(import_statements.keys())
+        methods_joined = "".join(methods)
+        client_file = f"""
+from typing import List
+
+from simple_parsing import ArgumentParser
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.schemas import SchemaGenerator
+from starlette.routing import Route, WebSocketRoute, BaseRoute
+import uvicorn
+
+from .{cls_file} import *
+from .{cls_file} import {cls.__name__}
+{imports_joined}
+
+class {cls.__name__}Server({cls.__name__}):
+{methods_joined}
+
+if __name__ == "__main__":
+    pass
+        """
+        return client_file
+
+    @classmethod
+    def _server_file_name(cls) -> str:
+        return f"{cls.__name__.lower()}_server"
+
+    @classmethod
+    def _write_server_file(cls) -> None:
+        """Generate and write the server file next to the current one"""
+        filename = f"{cls._server_file_name()}.py"
+        dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(dir, filename)
+        logging.info(f"writing client file to {filepath}")
+        with open(filepath, "w", encoding="utf-8") as f:
+            server_code = cls._gen_server()
+            fmt = format_str(server_code, mode=FileMode())
+            f.write(fmt)
+
     @classmethod
     def _gen_client(cls) -> str:
         """Generate a client for the server
@@ -1470,89 +1818,276 @@ if __name__ == "__main__":
         Returns:
             str: The client Python code
         """
+
         fns = inspect.getmembers(cls, predicate=inspect.isfunction)
         print("fns: ", fns)
-        params: List[str] = []
+        print("type fns: ", type(fns))
         methods: List[str] = []
-        # imports: List[str] = []
+        import_statements: Dict[str, Any] = {}
+
+        def build_default(o: Any, imports: Dict[str, Any]) -> str:
+            # if o is None:
+            #     return "None"
+            if isinstance(o, str):
+                return f"'{o}'"
+            if type(o).__module__ == "builtins":
+                return f"{o}"
+            else:
+                imports[f"import {o.__module__}"] = None
+                return f"{type(o).__module__}.{o}"
+
+        def build_hint(h: Type, imports: Dict[str, Any]) -> str:
+            if h.__name__ == "NoneType":
+                return "None"
+            if h.__name__ == "_empty":
+                return ""
+            if h.__module__ == "builtins":
+                return f"{h.__name__}"
+            else:
+                imports[f"import {h.__module__}"] = None
+                return f"{h.__module__}.{h.__name__}"
+
+        def build_param(name: str, _type: str) -> str:
+            if _type != "":
+                return f"{name}: {_type}"
+            return f"{name}"
+
+        def proc_arg(t: Type, imports: Dict[str, Any], fin_param: str) -> str:
+            ret_param = build_hint(t, imports)
+            args = typing.get_args(t)
+            if is_optional(t):
+                args = args[:-1]
+
+            ret_params: List[str] = []
+            for arg in args:
+                ret_params.append(proc_arg(arg, imports, fin_param))
+
+            if len(ret_params) > 0:
+                ret_param = f"{ret_param}[{', '.join(ret_params)}]"
+
+            ret_param = fin_param + ret_param
+            return ret_param
+
         for name, fn in fns:
+            params: List[str] = []
+            print("#############")
             if name.startswith("_"):
                 continue
 
             print("name: ", name)
             print("fn: ", fn)
-            sig = inspect.signature(fn)
+            print("fn dict: ", fn)
+            print("type fn: ", type(fn))
+            sig = signature(fn, eval_str=True, follow_wrapped=True)
+            print("sig: ", sig)
             print("sig str: ", str(sig))
 
-            # print("sig: ", sig)
-            # print("params: ", sig.parameters)
+            fin_sig = f"def {name}("
+            fin_params: List[str] = []
+
+            def proc_parameter(param: Parameter, imports: Dict[str, Any]):
+                print("===================")
+                print("processing param.... ", param)
+                print("===================")
+                print("param name: ", param.name)
+                print("param str: ", str(param))
+                mod = param.annotation.__module__
+                print("annot mod: ", mod)
+
+                nonlocal fin_params
+                # if mod == "builtins":
+                #     fin_param = f"{param.name}: {param.annotation.__name__}"
+                #     if param.default is not param.empty:
+                #         fin_param += f" = {param.default}"
+                #     fin_params.append(fin_param)
+                #     return
+
+                name = param.name
+                if str(param).startswith("*"):
+                    name = f"*{param.name}"
+                if str(param).startswith("**"):
+                    name = f"**{param.name}"
+
+                fin_param = build_param(name, proc_arg(param.annotation, imports, ""))
+
+                # print("args: ", args)
+                # if is_generic_type(h):
+                #     print("is generic")
+                #     args = typing.get_args(h)
+                #     for arg in args:
+                #         print("processing arg: ", arg)
+                #         proc_hint(arg)
+
+                #     origin = typing.get_origin(h)
+                #     if origin == list:
+                #         origin = List
+                #     if origin == dict:
+                #         origin = Dict
+                #     h = origin  # type: ignore
+
+                # TODO: handle Union
+                if param.default is not param.empty:
+                    print(">>>>> param default: ", param.default)
+                    print(">>>>> type param default: ", type(param.default))
+                    if isinstance(param.default, str):
+                        fin_param += f" = '{param.default}'"
+                    else:
+                        fin_param += f" = {build_default(param.default, imports)}"
+
+                print("@@@@@@@@@@@ adding param!: ", fin_param)
+                fin_params.append(fin_param)
+
+            for param in sig.parameters:
+                proc_parameter(sig.parameters[param], import_statements)
+
+            params_joined = ", ".join(fin_params)
+            fin_sig += params_joined
+            fin_sig += ")"
+
+            self_param: Optional[Parameter] = None
 
             for k in sig.parameters:
+                # print("-------")
+                # print("k: ", k)
+                # print("type k: ", type(k))
+
                 if k == "self":
+                    self_param = sig.parameters[k]
                     continue
-                param = sig.parameters[k]
+
+                parameter = sig.parameters[k]
+
+                # print("param: ", parameter)
+                # print("dir param: ", dir(parameter))
+                # print("param annotation: ", parameter.annotation)
+                # print("param annotation mod: ", parameter.annotation.__module__)
+                # print("param name: ", parameter.name)
+                # print("param default: ", parameter.default)
+                # print("param kind: ", parameter.kind)
                 # print("param annot: ", param.annotation)
-                _op = getattr(param.annotation, "to_dict", None)
+                # print("param annotation args: ", typing.get_args(parameter.annotation))
+
+                # I need to recursively call into the args, get create an import for it
+
+                _op = getattr(parameter.annotation, "to_dict", None)
                 if callable(_op):
                     params.append(f"'{k}': {k}.to_dict()")
                     continue
 
                 params.append(f"'{k}': {k}")
 
-            import_statements: Dict[str, Any] = {}
             hints = get_type_hints(fn)
 
-            def proc_hint(h: Type):
-                print("===================")
-                print("processing hint....")
-                print("===================")
-                mod = h.__module__
-                print("h mod: ", mod)
+            # def proc_hint(h: Type):
+            #     print("===================")
+            #     print("processing hint.... ", h)
+            #     print("===================")
+            #     mod = h.__module__
+            #     print("h mod: ", mod)
 
-                if mod == "builtins":
-                    return
+            #     if mod == "builtins":
+            #         return
 
-                if is_generic_type(h):
-                    print("is generic")
-                    args = typing.get_args(h)
-                    for arg in args:
-                        print("processing arg: ", arg)
-                        proc_hint(arg)
+            #     args = typing.get_args(h)
+            #     print("args: ", args)
+            #     if is_generic_type(h):
+            #         print("is generic")
+            #         args = typing.get_args(h)
+            #         for arg in args:
+            #             print("processing arg: ", arg)
+            #             proc_hint(arg)
 
-                    origin = typing.get_origin(h)
-                    if origin == list:
-                        origin = List
-                    if origin == dict:
-                        origin = Dict
-                    h = origin  # type: ignore
+            #         origin = typing.get_origin(h)
+            #         if origin == list:
+            #             origin = List
+            #         if origin == dict:
+            #             origin = Dict
+            #         h = origin  # type: ignore
 
-                # TODO: handle Union
+            #     # TODO: handle Union
 
-                import_statements[f"from {mod} import {h.__name__}"] = None
+            #     import_statements[f"from {mod} import {h.__name__}"] = None
 
-            for hint in hints:
-                print("hint: ", hint)
-                h = hints[hint]
-                proc_hint(h)
+            # for hint in hints:
+            #     h = hints[hint]
+            #     print("hint: ", h)
+            #     proc_hint(h)
 
             ret = hints["return"]
+            print("^^^^^^^^^^^^^^")
+            print("return: ", ret)
+            print("type ret: ", type(ret))
+
+            # ser_line = "if hasattr(ret, '__dict__'): ret = ret.__dict__"
+
+            is_iterable = is_iterable_cls(ret)
+            if is_iterable:
+                print("is iterable!")
+                args = get_args(ret)
+                print("iterable args: ", args)
+                if len(args) == 0:
+                    raise SystemError("args for iterable are None")
+                if len(args) > 1:
+                    raise ValueError("Iterable with args greater than one not currently supported")
+
+                ret = args[0]
+
+            # handle type vars
+            if hasattr(ret, "__bound__"):
+                ret = eval(ret.__bound__.__forward_arg__)
+                print("EVAL ret: ", ret)
+                print("EVAL ret type: ", type(ret))
+
+            ret_type = build_hint(ret, import_statements)
+            # we need to handle generic types here
+            fin_param = proc_arg(ret, import_statements, "")
+            fin_sig += f" -> {fin_param}:"
+
+            ser_line_2 = ""
+            if ret == NoneType:
+                ser_line = "ret = jdict['response']"
+            elif ret in [int, list, str, float, bool]:
+                ser_line = "ret = jdict['response']"
+            elif ret == dict:
+                ser_line = "ret = jdict"
+            else:
+                ser_line = f"ret = object.__new__({ret_type})"
+                ser_line_2 = "for k, v in jdict.items(): setattr(ret, k, v)"
+
+            if hasattr(ret, "__origin__"):
+                orig = ret.__origin__
+                if orig == dict:
+                    ser_line = "ret = jdict"
+                    ser_line_2 = ""
+
             ret_op = getattr(ret, "from_dict", None)
-            ser_line = "ret = jdict['response']"
+
+            # We could check for a data class here
+            # We could also check for a base class
+            # is there a way to create a python class reliably from a dictionary? How would you know
             print("ret_op: ", ret_op)
             if callable(ret_op):
-                ser_line = "ret = ret.from_dict(jdict)"
+                ser_line = f"ret = {ret_type}.from_dict(jdict)"
+                ser_line_2 = ""
 
-            params_joined = ",".join(params)
+            params_joined = ", ".join(params)
 
-            if isinstance(ret, Iterable):
+            doc = ""
+            if hasattr(fn, "__doc__") and fn.__doc__ is not None:
+                doc = f'"""{fn.__doc__}"""'
+
+            if is_iterable:
+                print("$$$$$$$$$$$$$$$$$$$$$$$")
+                print("****** is iterable!")
+                import_statements["import socket"] = None
+                import_statements["from websocket import create_connection"] = None
                 client_fn = f"""
-    def {name}{sig}:
-        server_addr = f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes:{SERVER_PORT}"
+    {fin_sig}
+        {doc}
+        server_addr = f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes:{{self.server_port}}"
 
         # you need to create your own socket here
-        sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", SERVER_PORT))
-        if self.uid is None:
-            self.uid = uuid.uuid4()
+        sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", self.server_port))
         
         encoded = parse.urlencode({{{params_joined}}})
         ws = create_connection(
@@ -1569,6 +2104,7 @@ if __name__ == "__main__":
                 if end:
                     break
                 {ser_line}
+                {ser_line_2}
                 yield ret
 
         except Exception as e:
@@ -1576,8 +2112,11 @@ if __name__ == "__main__":
             raise e
 """
             else:
+                print("$$$$$$$$$$$$$$$$$$$$$$$")
+                print("***** is not iterable!")
                 client_fn = f"""
-    def {name}{sig}:
+    {fin_sig}
+        {doc}
         params = json.dumps({{{params_joined}}}).encode("utf8")
         req = request.Request(
             f"{{self.server_addr}}/{name}",
@@ -1588,18 +2127,19 @@ if __name__ == "__main__":
         data = resp.read().decode("utf-8")
         jdict = json.loads(data)
         {ser_line}
+        {ser_line_2}
         return ret
             """
             methods.append(client_fn)
 
         imports_joined = "\n".join(import_statements.keys())
-        methods_joined = "\n".join(methods)
+        methods_joined = "".join(methods)
         client_file = f"""
 from urllib import request, parse
 import json
 import logging
 
-from arc.serve.server import Client
+from arc.core.resource import Client
 {imports_joined}
 
 class {cls.__name__}Client(Client):
@@ -1612,9 +2152,14 @@ class {cls.__name__}Client(Client):
     def _client_file_name(cls) -> str:
         return f"{cls.__name__.lower()}_client"
 
-    @local
     @classmethod
     def _write_client_file(cls) -> None:
         """Generate and write the client file next to the current one"""
-        with open(f"{cls._client_file_name}.py", "w", encoding="utf-8") as f:
-            f.write(cls._gen_client())
+        filename = f"{cls._client_file_name()}.py"
+        dir = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(dir, filename)
+        logging.info(f"writing client file to {filepath}")
+        with open(filepath, "w", encoding="utf-8") as f:
+            client_code = cls._gen_client()
+            fmt = format_str(client_code, mode=FileMode())
+            f.write(fmt)

@@ -56,8 +56,8 @@ class ObjectStore(ABC):
 class Kind(ABC):
     """A Kind of object, this is the interface all Arc objects must satisfy"""
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def name(cls) -> str:
         """Name of the object
 
@@ -66,8 +66,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def short_name(cls) -> str:
         """Short name for the object
 
@@ -76,8 +76,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def base_names(cls) -> List[str]:
         """Bases for the object
 
@@ -124,8 +124,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def store_cls(self, dev_dependencies: bool = False, clean: bool = True) -> str:
         """Create an artifact of the class
 
@@ -238,6 +238,11 @@ class Kind(ABC):
         pass
 
     @abstractmethod
+    def notebook(self: K) -> None:
+        """Launch a notebook for the object"""
+        pass
+
+    @abstractmethod
     def logs(self) -> Iterable[str]:
         """Logs for the process
 
@@ -255,8 +260,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def load(cls: Type[K], dir: str = "./artifacts") -> K:
         """Load the object
 
@@ -283,8 +288,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def labels(self) -> Dict[str, Any]:
         """Labels of the object
 
@@ -293,8 +298,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def schema(cls) -> str:
         """Schema of the object
 
@@ -303,8 +308,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def find(cls, locator: ObjectLocator) -> List[K]:
         """Find objects of this kind
 
@@ -316,8 +321,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def versions(cls) -> List[str]:
         """All versions of the base
 
@@ -326,8 +331,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def clean_artifacts(cls, dir: str = "./artifacts") -> None:
         """Clean any created artifacts
 
@@ -336,8 +341,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def opts_schema(cls) -> Dict[str, Any]:
         """Schema for the server options
 
@@ -346,8 +351,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def opts(cls) -> Optional[Type[Serializable]]:
         """Options for the server
 
@@ -356,8 +361,8 @@ class Kind(ABC):
         """
         pass
 
-    @abstractmethod
     @classmethod
+    @abstractmethod
     def from_opts(cls: Type[K], opts: Type[Serializable]) -> K:
         """Load from Opts
 

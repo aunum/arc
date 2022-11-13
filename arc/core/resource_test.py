@@ -1,24 +1,19 @@
-from typing import Iterator, List, Type
-from urllib import request
-import json
+from typing import Iterator
 import logging
-import importlib
 
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-
-from arc.serve.server import Client, Server
+from arc.core.resource import Resource
 
 logging.basicConfig(level=logging.INFO)
 
 
-class Foo(Server):
+class Foo(Resource):
     """A Foo"""
 
-    pass
+    def test(self) -> None:
+        print("hello")
 
 
-class Bar(Server):
+class Bar(Resource):
     """A Bar"""
 
     a: str
