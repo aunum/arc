@@ -1,9 +1,10 @@
 from __future__ import annotations
 import collections
 from dataclasses import dataclass
-from faulthandler import is_enabled
+from http import server
 import shutil
 from types import NoneType
+import types
 from urllib import request
 import json
 import socket
@@ -14,6 +15,7 @@ import typing
 import inspect
 import time
 import logging
+from textwrap import indent
 import os
 import yaml
 from pathlib import Path
@@ -77,7 +79,6 @@ from arc.kube.pod_util import (
 from arc.config import Config, RemoteSyncStrategy
 from arc.scm import SCM
 from arc.image.registry import get_img_labels, get_repo_tags
-from arc.data.encoding import ShapeEncoder
 from arc.kube.env import is_k8s_proc
 from arc.kube.auth_util import ensure_cluster_auth_resources
 from arc.image.build import img_id
@@ -498,27 +499,6 @@ class Client(Kind):
         logging.info(f"pod is ready'{pod_name}'")
 
         return po
-
-    @classmethod
-    def base_names(cls) -> List[str]:
-        """Bases for the resource
-
-        Raises:
-            SystemError: Server bases
-
-        Returns:
-            List[str]: Bases of the server
-        """
-        bases = inspect.getmro(cls)
-        base_names: List[str] = []
-        for base in bases:
-            if isinstance(base, Resource):
-                base_names.append(base.__name__)
-        return base_names
-
-    def delete(self) -> None:
-        """Delete the resource"""
-        self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
 
     @classmethod
     def find(cls, locator: ObjectLocator) -> List[str]:
@@ -1651,18 +1631,122 @@ if __name__ == "__main__":
     @classmethod
     def _gen_server(cls) -> str:
         routes: List[str] = []
-        methods: List[str] = []
+        server_fns: List[str] = []
         import_statements: Dict[str, Any] = {}
 
         fns = inspect.getmembers(cls, predicate=inspect.isfunction)
+        methods = inspect.getmembers(cls, predicate=inspect.ismethod)
+
+        fns.extend(methods)
+
+        def proc_load(t: Type, key: str, load_lines: List[str], idt: str = "") -> None:
+            print("--------")
+            print("type: ", t)
+            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                return
+
+            _op = getattr(t, "from_dict", None)
+            if callable(_op):
+                load_lines.append(indent(f"jdict['{key}'] = {t.__name__}.from_dict(jdict['{k}'])", idt))
+                return
+
+            if hasattr(t, "__origin__"):
+                print("has origin!")
+                # TODO: check dict types
+                if t.__origin__ == dict:
+                    print("dict!")
+                    return
+
+                if t.__origin__ == typing.Union:
+                    print("union!")
+                    args = typing.get_args(t)
+                    print("args: ", args)
+
+                    if len(args) == 0:
+                        logging.warning("found union with no args")
+
+                    load_lines.append("")
+                    load_lines.append(indent("_deserialized: bool = False", idt))
+                    for arg in args:
+                        load_lines.append(indent("try:", idt))
+                        proc_load(arg, key, load_lines, "    ")
+                        load_lines.append(indent("    _deserialized = True", idt))
+                        load_lines.append(indent("except:  # noqa", idt))
+                        load_lines.append(indent("    logging.warning('tried to serialize')", idt))
+                    load_lines.append(indent("if not _deserialized:", idt))
+                    load_lines.append(indent("    raise SystemError('could not be deserialized')", idt))
+                    load_lines.append("")
+
+                    return
+
+            if t in [int, list, str, float, bool]:
+                print("basic type")
+                return
+
+            if hasattr(t, "__dict__"):
+                print("dict!")
+                h = cls._build_hint(t, import_statements)
+                load_lines.append("")
+                load_lines.append(indent(f"_obj = object.__new__({h})", idt))
+                load_lines.append(indent(f"for _k, _v in _jdict['{key}'].items():", idt))
+                load_lines.append(indent("    setattr(_obj, _k, _v)", idt))
+                load_lines.append(indent(f"_jdict['{key}'] = _obj", idt))
+                load_lines.append("")
+                return
+            return
+
+        def proc_return(ret: Type, ret_lines: List[str], idt: str = "") -> None:
+            if ret == typing.Type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                return
+
+            if ret == NoneType:
+                ret_lines.append(indent("_ret = {'response': None}", idt))
+                return
+            if ret in [int, list, str, float, bool]:
+                ret_lines.append(indent("_ret = {'response': _ret}", idt))
+                return
+            if ret == dict:
+                # TODO: check dict types
+                return
+
+            if hasattr(ret, "__origin__"):
+                orig = ret.__origin__
+                if orig == dict:
+                    # TODO: check dict types
+                    return
+
+                if orig == typing.Union:
+                    args = typing.get_args(ret)
+                    lines = [indent("_serialized: bool = False", idt)]
+                    for arg in args:
+                        lines.append(indent("try:", idt))
+                        proc_return(arg, ret_lines, "    ")
+                        lines.append(indent("_serialized = True", idt))
+                        lines.append(indent("except:", idt))
+                        lines.append(indent("    logging.warning('tried to serialize')", idt))
+                        lines.append(indent("if not _serialized: raise SystemError('could not be serialized')", idt))
+                        ret_lines.extend(lines)
+
+            if hasattr(ret, "to_dict"):
+                ret_lines.append(indent("_ret = _ret.to_dict()", idt))
+                return
+
+            if hasattr(ret, "__dict__"):
+                ret_lines.append(indent("_ret = _ret.__dict__", idt))
+                return
+
+            return
+
         for name, fn in fns:
+            print("\n\n==============")
             print("fn: ", fn)
             print("type fn: ", type(fn))
 
             sig = signature(fn, eval_str=True, follow_wrapped=True)
 
             if hasattr(fn, "local"):
-                print("!!! ignoring: ", name)
                 continue
 
             if name.startswith("__"):
@@ -1671,29 +1755,26 @@ if __name__ == "__main__":
             if name.startswith("_"):
                 continue
 
-            load_lines = []
+            load_lines: List[str] = []
             for k in sig.parameters:
-                print("k", k)
-                if k == "self":
+                if k == "self" or k == "cls" or k == "args" or k == "kwargs" or k.startswith("*"):
                     continue
                 param = sig.parameters[k]
-                print("param annot: ", param.annotation)
-                _op = getattr(param.annotation, "from_dict", None)
-                print("_op: ", _op)
-                if callable(_op):
-                    print("!!!! callable")
-                    load_lines.append(f"jdict['{k}'] = {param.annotation.__name__}.from_dict(jdict['{k}'])")
+
+                t = param.annotation
+                proc_load(t, k, load_lines)
 
             hints = get_type_hints(fn)
-            ret = hints["return"]
 
-            ser_line = "if hasattr(ret, '__dict__'): ret = ret.__dict__"
+            if "return" not in hints:
+                logging.warning(f"no return method specified for function '{name}' skipping generation")
+                continue
+
+            ret = hints["return"]
 
             is_iterable = is_iterable_cls(ret)
             if is_iterable:
-                print("is iterable!")
                 args = get_args(ret)
-                print("iterable args: ", args)
                 if len(args) == 0:
                     raise SystemError("args for iterable are None")
                 if len(args) > 1:
@@ -1701,36 +1782,35 @@ if __name__ == "__main__":
 
                 ret = args[0]
 
-            if ret == NoneType:
-                ser_line = "ret = {'response': None}"
-            if ret in [int, list, str, float, bool]:
-                ser_line = "ret = {'response': ret}"
-            if ret == dict:
-                ser_line = ""
+            ser_lines: List[str] = []
+            proc_return(ret, ser_lines)
 
-            if hasattr(ret, "__origin__"):
-                orig = ret.__origin__
-                if orig == dict:
-                    ser_line = ""
-            if hasattr(ret, "to_dict"):
-                ser_line = "ret = ret.to_dict()"
-
-            ret_op = getattr(ret, "to_dict", None)
-
-            joined_load_lines = "\n".join(load_lines)
             if is_iterable:
+                fin_ser_lines = ""
+                for line in ser_lines:
+                    line += "\n"
+                    fin_ser_lines += indent(line, "            ")
+
+                joined_load_lines = ""
+                for line in load_lines:
+                    line += "\n"
+                    joined_load_lines += indent(line, "        ")
                 req_code = f"""
     async def _{name}_req(self, websocket):
+        \"""Request for function:
+        {sig}
+        \"""
+
         await websocket.accept()
         self._check_lock(websocket.headers)
 
         # Process incoming messages
-        jdict = websocket.query_params
-        {joined_load_lines}
-        for ret in self.{name}(**jdict):
-            {ser_line}
+        _jdict = websocket.query_params
+{joined_load_lines}
+        for _ret in self.{name}(**_jdict):
+{fin_ser_lines}
             print("seding json")
-            await websocket.send_json(ret)
+            await websocket.send_json(_ret)
             print("sent")
 
         print("sending end")
@@ -1738,24 +1818,33 @@ if __name__ == "__main__":
         print("all done sending data, closing socket")
         await websocket.close()
                 """
-                methods.append(req_code)
+                server_fns.append(req_code)
                 routes.append(f"WebSocketRoute('/{name}', endpoint=self._{name}_req)")
 
             else:
-                print("is NOT iterable")
-                if callable(ret_op):
-                    ser_line = "ret = ret.to_dict()"
+                fin_ser_lines = ""
+                for line in ser_lines:
+                    line += "\n"
+                    fin_ser_lines += indent(line, "        ")
 
+                joined_load_lines = ""
+                for line in load_lines:
+                    line += "\n"
+                    joined_load_lines += indent(line, "        ")
                 req_code = f"""
     async def _{name}_req(self, request):
-        jdict = await request.json()
+        \"""Request for function: 
+        {sig}
+        \"""
+
+        _jdict = await request.json()
         self._check_lock(request.headers)
-        {joined_load_lines}
-        ret = self.{name}(**jdict)
-        {ser_line}
-        return JSONResponse(ret)
+{joined_load_lines}
+        _ret = self.{name}(**_jdict)
+{fin_ser_lines}
+        return JSONResponse(_ret)
 """
-                methods.append(req_code)
+                server_fns.append(req_code)
                 routes.append(f"Route('/{name}', endpoint=self._{name}_req)")
 
             print("req code: ", req_code)
@@ -1766,32 +1855,34 @@ if __name__ == "__main__":
         return [{routes_joined}]
 """
         print("route code: ", route_code)
-        methods.append(route_code)
+        server_fns.append(route_code)
 
         cls_file_path = Path(inspect.getfile(cls))
         cls_file = cls_file_path.stem
 
         imports_joined = "\n".join(import_statements.keys())
-        methods_joined = "".join(methods)
+        server_fns_joined = "".join(server_fns)
         client_file = f"""
 from typing import List
+import logging
 
-from simple_parsing import ArgumentParser
-from starlette.applications import Starlette
+# from simple_parsing import ArgumentParser
+# from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.schemas import SchemaGenerator
+# from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
-import uvicorn
+# import uvicorn
 
 from .{cls_file} import *
 from .{cls_file} import {cls.__name__}
 {imports_joined}
 
 class {cls.__name__}Server({cls.__name__}):
-{methods_joined}
+{server_fns_joined}
 
 if __name__ == "__main__":
-    pass
+    o = {cls.__name__}Server.from_env()
+    o.serve()
         """
         return client_file
 
@@ -1808,8 +1899,38 @@ if __name__ == "__main__":
         logging.info(f"writing client file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             server_code = cls._gen_server()
-            fmt = format_str(server_code, mode=FileMode())
-            f.write(fmt)
+            # server_code = format_str(server_code, mode=FileMode())
+            f.write(server_code)
+
+    @classmethod
+    def _build_hint(cls, h: Type, imports: Dict[str, Any], module: Optional[str] = None) -> str:
+        if hasattr(h, "__forward_arg__"):
+            fq = f"{module}.{h.__forward_arg__}"
+            imports[f"import {module}"] = None
+            return fq
+
+        if h == Ellipsis:
+            return "..."
+
+        if hasattr(h, "__name__"):
+            if h.__name__ == "NoneType":
+                return "None"
+            if h.__name__ == "_empty":
+                return ""
+            if h.__module__ == "builtins":
+                return f"{h.__name__}"
+            else:
+                imports[f"import {h.__module__}"] = None
+                return f"{h.__module__}.{h.__name__}"
+        else:
+            if hasattr(h, "__module__"):
+                mod = h.__module__
+            else:
+                if module is None:
+                    raise ValueError("mod is None!")
+                mod = module
+            imports[f"import {mod}"] = None
+            return f"{mod}.{str(h)}"
 
     @classmethod
     def _gen_client(cls) -> str:
@@ -1820,14 +1941,13 @@ if __name__ == "__main__":
         """
 
         fns = inspect.getmembers(cls, predicate=inspect.isfunction)
-        print("fns: ", fns)
-        print("type fns: ", type(fns))
-        methods: List[str] = []
+        methods = inspect.getmembers(cls, predicate=inspect.ismethod)
+        fns.extend(methods)
+
+        client_fns: List[str] = []
         import_statements: Dict[str, Any] = {}
 
         def build_default(o: Any, imports: Dict[str, Any]) -> str:
-            # if o is None:
-            #     return "None"
             if isinstance(o, str):
                 return f"'{o}'"
             if type(o).__module__ == "builtins":
@@ -1836,31 +1956,20 @@ if __name__ == "__main__":
                 imports[f"import {o.__module__}"] = None
                 return f"{type(o).__module__}.{o}"
 
-        def build_hint(h: Type, imports: Dict[str, Any]) -> str:
-            if h.__name__ == "NoneType":
-                return "None"
-            if h.__name__ == "_empty":
-                return ""
-            if h.__module__ == "builtins":
-                return f"{h.__name__}"
-            else:
-                imports[f"import {h.__module__}"] = None
-                return f"{h.__module__}.{h.__name__}"
-
         def build_param(name: str, _type: str) -> str:
             if _type != "":
                 return f"{name}: {_type}"
             return f"{name}"
 
-        def proc_arg(t: Type, imports: Dict[str, Any], fin_param: str) -> str:
-            ret_param = build_hint(t, imports)
+        def proc_arg(t: Type, imports: Dict[str, Any], fin_param: str, module: Optional[str] = None) -> str:
+            ret_param = cls._build_hint(t, imports, module)
             args = typing.get_args(t)
             if is_optional(t):
                 args = args[:-1]
 
             ret_params: List[str] = []
             for arg in args:
-                ret_params.append(proc_arg(arg, imports, fin_param))
+                ret_params.append(proc_arg(arg, imports, fin_param, module))
 
             if len(ret_params) > 0:
                 ret_param = f"{ret_param}[{', '.join(ret_params)}]"
@@ -1868,39 +1977,112 @@ if __name__ == "__main__":
             ret_param = fin_param + ret_param
             return ret_param
 
+        def get_ser_by_type(name: str, t: Type) -> str:
+            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                return ""
+
+            _op = getattr(t, "to_dict", None)
+            if callable(_op):
+                return f"{name}.to_dict()"
+
+            if hasattr(t, "__dict__"):
+                return f"{name}.__dict__"
+
+            return name
+
+        def build_dict(name: str, t: Type, params: List[str], ser_lines: List[str]) -> None:
+            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                return
+
+            _op = getattr(t, "to_dict", None)
+            if callable(_op):
+                params.append(f"'{name}': {get_ser_by_type(name, t)}")
+                return
+
+            if hasattr(t, "__dict__"):
+                params.append(f"'{name}': {name}.__dict__")
+                return
+
+            if hasattr(t, "__origin__"):
+                if t.__origin__ == typing.Union:
+                    # TODO: make this fully recursive
+                    args = typing.get_args(t)
+                    for i, arg in enumerate(args):
+                        if i == 0:
+                            ser_lines.append(f"if isinstance({name}, {arg}):")
+                            ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
+                        else:
+                            ser_lines.append(f"elif isinstance({name}, {arg}):")
+                            ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
+                    ser_lines.append("else:")
+                    ser_lines.append("    raise ValueError('Do not know how to serialize object')")
+                    params.append(f"'{name}': _{name}")
+                    return
+
+            params.append(f"'{name}': {name}")
+            return
+
+        def proc_return(ret: Type, ser_lines: List[str], working_module: str, idt: str = "") -> None:
+            ret_op = getattr(ret, "from_dict", None)
+            ret_type = cls._build_hint(orig_ret, import_statements, working_module)
+
+            if ret == NoneType:
+                ser_lines.append(indent("_ret = _jdict['response']", idt))
+            elif callable(ret_op):
+                ser_lines.append(indent(f"_ret = {ret_type}.from_dict(_jdict)", idt))
+            elif ret in [int, list, str, float, bool] or (
+                hasattr(ret, "__origin__") and ret.__origin__ in [int, list, str, float, bool]
+            ):
+                ser_lines.append(indent("_ret = _jdict['response']", idt))
+            elif ret == dict or (hasattr(ret, "__origin__") and ret.__origin__ == dict):
+                ser_lines.append(indent("_ret = _jdict", idt))
+            elif hasattr(ret, "__origin__") and ret.__origin__ == typing.Union:
+                args = get_args(ret)
+                if len(args) == 0:
+                    raise SystemError("args for iterable are None")
+                ser_lines.append(indent("_deserialized: bool = False", idt))
+                for i, arg in enumerate(args):
+                    # this needs to be recursive
+                    ser_lines.append(indent("if not _deserialized:", idt))
+                    ser_lines.append(indent("    try:", idt))
+                    proc_return(arg, ser_lines, working_module, "        ")
+                    ser_lines.append(indent("    except:  # noqa", idt))
+                    ser_lines.append(indent("        pass", idt))
+                ser_lines.append(indent("if not _deserialized:", idt))
+                ser_lines.append(indent("    raise ValueError('unable to deserialize returned value')", idt))
+            elif hasattr(ret, "__origin__") and ret.__origin__ == dict:
+                ser_lines.append(indent("_ret = _jdict", idt))
+            else:
+                ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
+                ser_lines.append(indent("for k, v in _jdict.items(): setattr(_ret, k, v)", idt))
+
+            # We could check for a data class here
+            # We could also check for a base class
+            # is there a way to create a python class reliably from a dictionary? How would you know
+
+            return
+
         for name, fn in fns:
             params: List[str] = []
-            print("#############")
+
+            if hasattr(fn, "local"):
+                continue
+
             if name.startswith("_"):
                 continue
 
-            print("name: ", name)
-            print("fn: ", fn)
-            print("fn dict: ", fn)
-            print("type fn: ", type(fn))
             sig = signature(fn, eval_str=True, follow_wrapped=True)
-            print("sig: ", sig)
-            print("sig str: ", str(sig))
 
             fin_sig = f"def {name}("
             fin_params: List[str] = []
 
-            def proc_parameter(param: Parameter, imports: Dict[str, Any]):
-                print("===================")
-                print("processing param.... ", param)
-                print("===================")
-                print("param name: ", param.name)
-                print("param str: ", str(param))
-                mod = param.annotation.__module__
-                print("annot mod: ", mod)
+            if isinstance(fn, types.MethodType):
+                fin_params.append("self")
 
+            def proc_parameter(param: Parameter, imports: Dict[str, Any], module: Optional[str] = None):
                 nonlocal fin_params
-                # if mod == "builtins":
-                #     fin_param = f"{param.name}: {param.annotation.__name__}"
-                #     if param.default is not param.empty:
-                #         fin_param += f" = {param.default}"
-                #     fin_params.append(fin_param)
-                #     return
 
                 name = param.name
                 if str(param).startswith("*"):
@@ -1908,123 +2090,51 @@ if __name__ == "__main__":
                 if str(param).startswith("**"):
                     name = f"**{param.name}"
 
-                fin_param = build_param(name, proc_arg(param.annotation, imports, ""))
-
-                # print("args: ", args)
-                # if is_generic_type(h):
-                #     print("is generic")
-                #     args = typing.get_args(h)
-                #     for arg in args:
-                #         print("processing arg: ", arg)
-                #         proc_hint(arg)
-
-                #     origin = typing.get_origin(h)
-                #     if origin == list:
-                #         origin = List
-                #     if origin == dict:
-                #         origin = Dict
-                #     h = origin  # type: ignore
+                fin_param = build_param(name, proc_arg(param.annotation, imports, "", module))
 
                 # TODO: handle Union
                 if param.default is not param.empty:
-                    print(">>>>> param default: ", param.default)
-                    print(">>>>> type param default: ", type(param.default))
                     if isinstance(param.default, str):
                         fin_param += f" = '{param.default}'"
                     else:
                         fin_param += f" = {build_default(param.default, imports)}"
 
-                print("@@@@@@@@@@@ adding param!: ", fin_param)
                 fin_params.append(fin_param)
 
             for param in sig.parameters:
-                proc_parameter(sig.parameters[param], import_statements)
+                proc_parameter(sig.parameters[param], import_statements, fn.__module__)
 
             params_joined = ", ".join(fin_params)
             fin_sig += params_joined
             fin_sig += ")"
 
-            self_param: Optional[Parameter] = None
+            param_ser_lines: List[str] = []
 
             for k in sig.parameters:
-                # print("-------")
-                # print("k: ", k)
-                # print("type k: ", type(k))
-
                 if k == "self":
-                    self_param = sig.parameters[k]
                     continue
 
                 parameter = sig.parameters[k]
-
-                # print("param: ", parameter)
-                # print("dir param: ", dir(parameter))
-                # print("param annotation: ", parameter.annotation)
-                # print("param annotation mod: ", parameter.annotation.__module__)
-                # print("param name: ", parameter.name)
-                # print("param default: ", parameter.default)
-                # print("param kind: ", parameter.kind)
-                # print("param annot: ", param.annotation)
-                # print("param annotation args: ", typing.get_args(parameter.annotation))
-
-                # I need to recursively call into the args, get create an import for it
-
-                _op = getattr(parameter.annotation, "to_dict", None)
-                if callable(_op):
-                    params.append(f"'{k}': {k}.to_dict()")
-                    continue
-
-                params.append(f"'{k}': {k}")
+                build_dict(k, parameter.annotation, params, param_ser_lines)
 
             hints = get_type_hints(fn)
 
-            # def proc_hint(h: Type):
-            #     print("===================")
-            #     print("processing hint.... ", h)
-            #     print("===================")
-            #     mod = h.__module__
-            #     print("h mod: ", mod)
-
-            #     if mod == "builtins":
-            #         return
-
-            #     args = typing.get_args(h)
-            #     print("args: ", args)
-            #     if is_generic_type(h):
-            #         print("is generic")
-            #         args = typing.get_args(h)
-            #         for arg in args:
-            #             print("processing arg: ", arg)
-            #             proc_hint(arg)
-
-            #         origin = typing.get_origin(h)
-            #         if origin == list:
-            #             origin = List
-            #         if origin == dict:
-            #             origin = Dict
-            #         h = origin  # type: ignore
-
-            #     # TODO: handle Union
-
-            #     import_statements[f"from {mod} import {h.__name__}"] = None
-
-            # for hint in hints:
-            #     h = hints[hint]
-            #     print("hint: ", h)
-            #     proc_hint(h)
+            if "return" not in hints:
+                logging.warning(f"function '{name}' has no return parameter, skipping generation")
+                continue
 
             ret = hints["return"]
-            print("^^^^^^^^^^^^^^")
-            print("return: ", ret)
-            print("type ret: ", type(ret))
+            orig_ret = ret
+
+            if ret == typing.Type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                continue
 
             # ser_line = "if hasattr(ret, '__dict__'): ret = ret.__dict__"
 
             is_iterable = is_iterable_cls(ret)
             if is_iterable:
-                print("is iterable!")
                 args = get_args(ret)
-                print("iterable args: ", args)
                 if len(args) == 0:
                     raise SystemError("args for iterable are None")
                 if len(args) > 1:
@@ -2035,105 +2145,90 @@ if __name__ == "__main__":
             # handle type vars
             if hasattr(ret, "__bound__"):
                 ret = eval(ret.__bound__.__forward_arg__)
-                print("EVAL ret: ", ret)
-                print("EVAL ret type: ", type(ret))
+                orig_ret = ret
 
-            ret_type = build_hint(ret, import_statements)
             # we need to handle generic types here
-            fin_param = proc_arg(ret, import_statements, "")
+            fin_param = proc_arg(orig_ret, import_statements, "", fn.__module__)
             fin_sig += f" -> {fin_param}:"
 
-            ser_line_2 = ""
-            if ret == NoneType:
-                ser_line = "ret = jdict['response']"
-            elif ret in [int, list, str, float, bool]:
-                ser_line = "ret = jdict['response']"
-            elif ret == dict:
-                ser_line = "ret = jdict"
-            else:
-                ser_line = f"ret = object.__new__({ret_type})"
-                ser_line_2 = "for k, v in jdict.items(): setattr(ret, k, v)"
-
-            if hasattr(ret, "__origin__"):
-                orig = ret.__origin__
-                if orig == dict:
-                    ser_line = "ret = jdict"
-                    ser_line_2 = ""
-
-            ret_op = getattr(ret, "from_dict", None)
-
-            # We could check for a data class here
-            # We could also check for a base class
-            # is there a way to create a python class reliably from a dictionary? How would you know
-            print("ret_op: ", ret_op)
-            if callable(ret_op):
-                ser_line = f"ret = {ret_type}.from_dict(jdict)"
-                ser_line_2 = ""
+            ret_ser_lines: List[str] = []
+            proc_return(ret, ret_ser_lines, fn.__module__)
 
             params_joined = ", ".join(params)
+
+            param_ser_lines_joined = ""
+            for line in param_ser_lines:
+                line += "\n"
+                param_ser_lines_joined += indent(line, "        ")
 
             doc = ""
             if hasattr(fn, "__doc__") and fn.__doc__ is not None:
                 doc = f'"""{fn.__doc__}"""'
 
             if is_iterable:
-                print("$$$$$$$$$$$$$$$$$$$$$$$")
-                print("****** is iterable!")
                 import_statements["import socket"] = None
                 import_statements["from websocket import create_connection"] = None
+
+                ret_ser_lines_joined = ""
+                for line in ret_ser_lines:
+                    line += "\n"
+                    ret_ser_lines_joined += indent(line, "                ")
+
                 client_fn = f"""
     {fin_sig}
         {doc}
-        server_addr = f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes:{{self.server_port}}"
+        _server_addr = f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes:{{self.server_port}}"
 
         # you need to create your own socket here
-        sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", self.server_port))
-        
-        encoded = parse.urlencode({{{params_joined}}})
-        ws = create_connection(
-            f"ws://{{server_addr}}/{name}?{{encoded}}",
+        _sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", self.server_port))
+{param_ser_lines_joined}
+        _encoded = parse.urlencode({{{params_joined}}})
+        _ws = create_connection(
+            f"ws://{{_server_addr}}/{name}?{{_encoded}}",
             header=[f"client-uuid: {{self.uid}}"],
-            socket=sock,
+            socket=_sock,
         )
         try:
             while True:
-                _, data = ws.recv_data()
+                _, _data = _ws.recv_data()
 
-                jdict = json.loads(data)
-                end = jdict["end"]
-                if end:
+                _jdict = json.loads(_data)
+                _end = _jdict["end"]
+                if _end:
                     break
-                {ser_line}
-                {ser_line_2}
-                yield ret
+{ret_ser_lines_joined}
+                yield _ret
 
         except Exception as e:
             print("stream exception: ", e)
             raise e
 """
             else:
-                print("$$$$$$$$$$$$$$$$$$$$$$$")
-                print("***** is not iterable!")
+                ret_ser_lines_joined = ""
+                for line in ret_ser_lines:
+                    line += "\n"
+                    ret_ser_lines_joined += indent(line, "        ")
+
                 client_fn = f"""
     {fin_sig}
         {doc}
-        params = json.dumps({{{params_joined}}}).encode("utf8")
-        req = request.Request(
+{param_ser_lines_joined}
+        _params = json.dumps({{{params_joined}}}).encode("utf8")
+        _req = request.Request(
             f"{{self.server_addr}}/{name}",
-            data=params,
+            data=_params,
             headers={{"content-type": "application/json"}}
         )
-        resp = request.urlopen(req)
-        data = resp.read().decode("utf-8")
-        jdict = json.loads(data)
-        {ser_line}
-        {ser_line_2}
-        return ret
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+{ret_ser_lines_joined}
+        return _ret
             """
-            methods.append(client_fn)
+            client_fns.append(client_fn)
 
         imports_joined = "\n".join(import_statements.keys())
-        methods_joined = "".join(methods)
+        client_fns_joined = "".join(client_fns)
         client_file = f"""
 from urllib import request, parse
 import json
@@ -2143,7 +2238,7 @@ from arc.core.resource import Client
 {imports_joined}
 
 class {cls.__name__}Client(Client):
-{methods_joined}
+{client_fns_joined}
         """
 
         return client_file
@@ -2161,5 +2256,5 @@ class {cls.__name__}Client(Client):
         logging.info(f"writing client file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             client_code = cls._gen_client()
-            fmt = format_str(client_code, mode=FileMode())
-            f.write(fmt)
+            # client_code = format_str(client_code, mode=FileMode())
+            f.write(client_code)
