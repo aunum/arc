@@ -695,6 +695,16 @@ class Client(Kind):
 
         return str(uri)
 
+    def _is_annotation_match(annotations: Dict[str, Type], d: Dict[str, Any]) -> bool:
+        for name, t in annotations.items():
+            if name not in d:
+                return False
+
+            if not isinstance(d[name], t):
+                return False
+
+        return True
+
 
 def init_wrapper(method):
     """Init wrapper stores the args provided on object creation so that they
@@ -857,6 +867,10 @@ def is_iterable_cls(t: Type) -> bool:
 
 # class CombinedMeta(ResourceMetaClass, ABCMeta):
 #     pass
+
+
+class TypeNotSupportedError(Exception):
+    pass
 
 
 class CombinedMeta(ABCMeta):
@@ -1639,18 +1653,43 @@ if __name__ == "__main__":
 
         fns.extend(methods)
 
-        def proc_load(t: Type, key: str, load_lines: List[str], idt: str = "") -> None:
+        def proc_load(
+            t: Type,
+            key: str,
+            load_lines: List[str],
+            idt: str = "",
+            default: Optional[Any] = None,
+            optional_dict: Optional[Dict[str, Any]] = None,
+        ) -> None:
             print("--------")
             print("type: ", t)
             if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
                 logging.warning("types not yet supported as parameters")
+                raise TypeNotSupportedError()
+
+            if t in [int, list, str, float, bool]:
+                print("basic type")
                 return
+
+            if optional_dict is None:
+                optional_dict = {}
+
+            if param.default != inspect._empty and key not in optional_dict:
+                load_lines.append(indent(f"if '{key}' in _jdict:", idt))
+                idt += "    "
+                optional_dict[key] = None
 
             _op = getattr(t, "from_dict", None)
             if callable(_op):
-                load_lines.append(indent(f"jdict['{key}'] = {t.__name__}.from_dict(jdict['{k}'])", idt))
+                load_lines.append(indent(f"_jdict['{key}'] = {t.__name__}.from_dict(_jdict['{k}'])", idt))
                 return
 
+            # For basic types we need to just direcdtly detect them and type check them
+            # For more complex objects we unfortunately need to do type checks on the state unless metadata is provided
+            # The one BIG gotcha, is if objects have the same fields - can we just check this at compile time?
+            # with the python client is there any reason to not send the jsonpickle state? Just to give more info?
+            # we should look to how openapi does this? and maybe use the openapi generator if we like it
+            # Do we need to make sure the spec that is generated is the same as the python code?
             if hasattr(t, "__origin__"):
                 print("has origin!")
                 # TODO: check dict types
@@ -1667,22 +1706,57 @@ if __name__ == "__main__":
                         logging.warning("found union with no args")
 
                     load_lines.append("")
-                    load_lines.append(indent("_deserialized: bool = False", idt))
-                    for arg in args:
-                        load_lines.append(indent("try:", idt))
-                        proc_load(arg, key, load_lines, "    ")
-                        load_lines.append(indent("    _deserialized = True", idt))
-                        load_lines.append(indent("except:  # noqa", idt))
-                        load_lines.append(indent("    logging.warning('tried to serialize')", idt))
-                    load_lines.append(indent("if not _deserialized:", idt))
-                    load_lines.append(indent("    raise SystemError('could not be deserialized')", idt))
+                    # load_lines.append(indent("_deserialized: bool = False", idt))
+
+                    if len(args) == 2 and args[1] == NoneType:
+                        # Handle optionals
+                        args = (args[1], args[0])
+                    for i, arg in enumerate(args):
+                        if_line = "if"
+                        if i > 0:
+                            if_line = "elif"
+
+                        h = cls._build_hint(arg, import_statements)
+
+                        if arg in [int, list, str, float, bool, bytes]:
+                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
+                            load_lines.append(indent("    pass", idt))
+                            continue
+
+                        elif arg == NoneType:
+                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
+                            load_lines.append(indent("    pass", idt))
+                            continue
+
+                        elif hasattr(arg, "__annotations__"):
+                            load_lines.append(
+                                indent(
+                                    f"{if_line} self._is_annotation_match({h}.__annotations__, _jdict['{key}']):", idt
+                                )
+                            )
+                            proc_load(arg, key, load_lines, idt + "    ", default, optional_dict=optional_dict)
+
+                        elif hasattr(arg, "__origin__") and arg.__origin__ in [list, dict]:
+                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
+                            load_lines.append(indent("    pass", idt))
+                            continue
+
+                        elif arg == typing.Type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
+                            logging.warning("types not yet supported as parameters")
+                            raise TypeNotSupportedError()
+
+                        else:
+                            raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
+                        # load_lines.append(indent("    _deserialized = True", idt))
+                        # load_lines.append(indent("except:  # noqa", idt))
+                        # load_lines.append(indent("    logging.warning('tried to serialize')", idt))
+
+                    load_lines.append(indent("else:", idt))
+                    # load_lines.append(indent("if not _deserialized:", idt))
+                    load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {key}')", idt))
                     load_lines.append("")
 
                     return
-
-            if t in [int, list, str, float, bool]:
-                print("basic type")
-                return
 
             if hasattr(t, "__dict__"):
                 print("dict!")
@@ -1699,7 +1773,7 @@ if __name__ == "__main__":
         def proc_return(ret: Type, ret_lines: List[str], idt: str = "") -> None:
             if ret == typing.Type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
                 logging.warning("types not yet supported as parameters")
-                return
+                raise TypeNotSupportedError()
 
             if ret == NoneType:
                 ret_lines.append(indent("_ret = {'response': None}", idt))
@@ -1719,15 +1793,59 @@ if __name__ == "__main__":
 
                 if orig == typing.Union:
                     args = typing.get_args(ret)
-                    lines = [indent("_serialized: bool = False", idt)]
-                    for arg in args:
-                        lines.append(indent("try:", idt))
-                        proc_return(arg, ret_lines, "    ")
-                        lines.append(indent("_serialized = True", idt))
-                        lines.append(indent("except:", idt))
-                        lines.append(indent("    logging.warning('tried to serialize')", idt))
-                        lines.append(indent("if not _serialized: raise SystemError('could not be serialized')", idt))
-                        ret_lines.extend(lines)
+
+                    for i, arg in enumerate(args):
+                        if_line = "if"
+                        if i > 0:
+                            if_line = "elif"
+
+                        h = cls._build_hint(arg, import_statements)
+
+                        if ret == typing.Type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
+                            logging.warning("types not yet supported as parameters")
+                            raise TypeNotSupportedError()
+
+                        if arg in [int, list, str, float, bool, bytes]:
+                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
+                            load_lines.append(indent("    _ret = {'response': _ret}", idt))
+                            continue
+
+                        elif arg == NoneType:
+                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
+                            load_lines.append(indent("    _ret = {'response': None}", idt))
+                            continue
+
+                        elif hasattr(arg, "__annotations__"):
+                            load_lines.append(
+                                indent(f"{if_line} self._is_annotation_match({h}.__annotations__, _ret):", idt)
+                            )
+                            proc_return(arg, ret_lines, idt + "    ")
+
+                        # TODO: need to handle dict and list args
+                        elif hasattr(arg, "__origin__") and arg.__origin__ in [list, dict]:
+                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
+                            load_lines.append(indent("    pass", idt))
+                            continue
+
+                        else:
+                            raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
+                        # load_lines.append(indent("    _deserialized = True", idt))
+                        # load_lines.append(indent("except:  # noqa", idt))
+                        # load_lines.append(indent("    logging.warning('tried to serialize')", idt))
+
+                    load_lines.append(indent("else:", idt))
+                    # load_lines.append(indent("if not _deserialized:", idt))
+                    load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {ret}')", idt))
+                    load_lines.append("")
+
+                    # for arg in args:
+                    #     lines.append(indent("try:", idt))
+                    #     proc_return(arg, ret_lines, "    ")
+                    #     lines.append(indent("_serialized = True", idt))
+                    #     lines.append(indent("except:", idt))
+                    #     lines.append(indent("    logging.warning('tried to serialize')", idt))
+                    #     lines.append(indent("if not _serialized: raise SystemError('could not be serialized')", idt))
+                    #     ret_lines.extend(lines)
 
             if hasattr(ret, "to_dict"):
                 ret_lines.append(indent("_ret = _ret.to_dict()", idt))
@@ -1756,13 +1874,23 @@ if __name__ == "__main__":
                 continue
 
             load_lines: List[str] = []
+            not_supported: bool = False
             for k in sig.parameters:
-                if k == "self" or k == "cls" or k == "args" or k == "kwargs" or k.startswith("*"):
-                    continue
                 param = sig.parameters[k]
+                if k == "self" or k == "cls" or k == "args" or k == "kwargs" or str(param).startswith("*"):
+                    continue
 
                 t = param.annotation
-                proc_load(t, k, load_lines)
+
+                try:
+                    proc_load(t, k, load_lines, default=param.default)
+                except TypeNotSupportedError:
+                    not_supported = True
+                    break
+
+            if not_supported:
+                logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
+                continue
 
             hints = get_type_hints(fn)
 
@@ -1783,7 +1911,12 @@ if __name__ == "__main__":
                 ret = args[0]
 
             ser_lines: List[str] = []
-            proc_return(ret, ser_lines)
+
+            try:
+                proc_return(ret, ser_lines)
+            except TypeNotSupportedError:
+                logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
+                continue
 
             if is_iterable:
                 fin_ser_lines = ""
@@ -1798,7 +1931,7 @@ if __name__ == "__main__":
                 req_code = f"""
     async def _{name}_req(self, websocket):
         \"""Request for function:
-        {sig}
+        {name}{sig}
         \"""
 
         await websocket.accept()
@@ -1834,11 +1967,12 @@ if __name__ == "__main__":
                 req_code = f"""
     async def _{name}_req(self, request):
         \"""Request for function: 
-        {sig}
+        {name}{sig}
         \"""
 
         _jdict = await request.json()
         self._check_lock(request.headers)
+
 {joined_load_lines}
         _ret = self.{name}(**_jdict)
 {fin_ser_lines}
@@ -2056,7 +2190,8 @@ if __name__ == "__main__":
                 ser_lines.append(indent("_ret = _jdict", idt))
             else:
                 ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
-                ser_lines.append(indent("for k, v in _jdict.items(): setattr(_ret, k, v)", idt))
+                ser_lines.append(indent("for k, v in _jdict.items():", idt))
+                ser_lines.append(indent("    setattr(_ret, k, v)", idt))
 
             # We could check for a data class here
             # We could also check for a base class

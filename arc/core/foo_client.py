@@ -35,7 +35,8 @@ class FooClient(Client):
         _data = _resp.read().decode("utf-8")
         _jdict = json.loads(_data)
         _ret = object.__new__(arc.kind.PID)
-        for k, v in _jdict.items(): setattr(_ret, k, v)
+        for k, v in _jdict.items():
+            setattr(_ret, k, v)
 
         return _ret
             
@@ -747,7 +748,8 @@ class FooClient(Client):
         if not _deserialized:
             try:
                 _ret = object.__new__(typing.Optional)
-                for k, v in _jdict.items(): setattr(_ret, k, v)
+                for k, v in _jdict.items():
+                    setattr(_ret, k, v)
             except:  # noqa
                 pass
         if not _deserialized:
