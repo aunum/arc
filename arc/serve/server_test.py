@@ -1,3 +1,4 @@
+from __future__ import barry_as_FLUFL
 from typing import Iterator, List, Type
 from urllib import request
 import json

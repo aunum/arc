@@ -10,6 +10,7 @@ class Foo(Resource):
     """A Foo"""
 
     def test(self) -> None:
+        """A test function"""
         print("hello")
 
 
@@ -20,6 +21,12 @@ class Bar(Resource):
     b: int
 
     def __init__(self, a: str, b: int) -> None:
+        """A Bar resource
+
+        Args:
+            a (str): A string
+            b (int): An int
+        """
         self.a = a
         self.b = b
 
@@ -69,24 +76,73 @@ class Bar(Resource):
         for i in range(num):
             yield f"{i}: {a}"
 
-    # def __dir__(self):
-    #     return super().__dir__() + [str(k) for k in self.keys()]
+
+def test_foo_object():
+    FooClient = Foo.client(hot=True, dev_dependencies=True)
+
+    # Create a remote instance
+    print("creating foo")
+    foo = FooClient()
+
+    print("foo info: ", foo.info())
+    print("foo labels: ", foo.labels())
+    print("foo health: ", foo.health())
+    print("foo test: ", foo.test())
+
+    print("creating foo 2")
+    foo2 = FooClient()
+
+    print("foo2 info: ", foo2.info())
+    print("foo2 labels: ", foo2.labels())
+
+    print("deleting foo")
+    foo.delete()
+
+    print("foo2 health: ", foo2.health())
+    print("foo2 test: ", foo2.test())
+
+    print("delete foo2")
+    foo2.delete()
+
+
+def test_bar_object():
+    # Create a Bar client class with the given options
+    print("creating bar")
+    BarClient = Bar.client(hot=False, dev_dependencies=True, clean=False)
+
+    # Create a remote Bar instance with the given parameters
+    bar_client = BarClient("baz", 1)
+
+    print("bar info: ", bar_client.info())
+    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "baz" + "b: " + str(1)
+    assert bar_client.add(1, 3) == 4
+    bar_client.set("qoz", 5)
+    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "qoz" + "b: " + str(5)
+    bar_client.delete()
+
+    print("creating bar2")
+    bar_client2 = Bar.client(dev_dependencies=True)("qux", 2)
+
+    print("bar2 info: ", bar_client2.info())
+    print("bar2 echo blue: ", bar_client2.echo("blue"))
+    assert bar_client2.echo("blue") == "blue" + " -- hello! " + "a: " + "qux" + "b: " + str(2)
+    bar_client2.delete()
+
+
+def test_stream():
+    BarClient = Bar.client(dev_dependencies=True, clean=False)
+
+    with BarClient("zoop", 6) as bar:
+        for i, s in enumerate(bar.stream("test", 10)):
+            assert s == f"{i}: test"
 
 
 if __name__ == "__main__":
-    foo = Foo()
+    print("testing foo")
+    test_foo_object()
 
-    foo_cli = foo.develop(clean=False)
+    print("testing bar")
+    test_bar_object()
 
-    print("foo info: ", foo_cli.info())
-    print("foo labels: ", foo_cli.labels())
-    print("foo health: ", foo_cli.health())
-
-    foo2 = Foo()
-
-    bar = Bar(a="ipsum", b=5)
-
-    bar_cli = bar.develop(clean=False)
-
-    print("bar info: ", bar_cli.info())
-    print("bar echo: ", bar_cli.echo("yellow"))
+    print("testing stream")
+    test_stream()

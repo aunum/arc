@@ -2,6 +2,7 @@ from typing import List
 import logging
 import os
 import json
+import urllib
 
 # from simple_parsing import ArgumentParser
 from starlette.applications import Starlette
@@ -11,7 +12,7 @@ from starlette.routing import Route, WebSocketRoute, BaseRoute
 import uvicorn
 
 from resource_test import *
-from resource_test import Foo
+from resource_test import Bar
 import arc.kind
 import typing
 import arc.config
@@ -23,7 +24,29 @@ else:
     logging.basicConfig(level=log_level)
 
 
-class FooServer(Foo):
+class BarServer(Bar):
+    async def _add_req(self, request):
+        """Request for function:
+        add(self, x: int, y: int) -> int
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        _ret = self.add(**_jdict)
+        _ret = {"response": _ret}
+
+        return JSONResponse(_ret)
+
     async def _diff_req(self, request):
         """Request for function:
         diff(self, uri: str) -> str
@@ -42,6 +65,28 @@ class FooServer(Foo):
         self._check_lock(headers)
 
         _ret = self.diff(**_jdict)
+        _ret = {"response": _ret}
+
+        return JSONResponse(_ret)
+
+    async def _echo_req(self, request):
+        """Request for function:
+        echo(self, txt: str) -> str
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        _ret = self.echo(**_jdict)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -136,8 +181,13 @@ class FooServer(Foo):
         self._check_lock(headers)
 
         # Process incoming messages
-        _jdict = websocket.query_params
+        qs = urllib.parse.parse_qs(str(websocket.query_params))
 
+        _jdict = {}
+        if "data" in qs and len(qs["data"]) > 0:
+            _jdict = json.loads(qs["data"][0])
+
+        print("jdict: ", _jdict)
         for _ret in self.logs(**_jdict):
             _ret = {"response": _ret}
 
@@ -145,8 +195,6 @@ class FooServer(Foo):
             await websocket.send_json(_ret)
             print("sent")
 
-        print("sending end")
-        await websocket.send_json({"end": True})
         print("all done sending data, closing socket")
         await websocket.close()
 
@@ -216,6 +264,28 @@ class FooServer(Foo):
 
         return JSONResponse(_ret)
 
+    async def _set_req(self, request):
+        """Request for function:
+        set(self, a: str, b: int) -> None
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        _ret = self.set(**_jdict)
+        _ret = {"response": None}
+
+        return JSONResponse(_ret)
+
     async def _source_req(self, request):
         """Request for function:
         source(self) -> str
@@ -260,6 +330,34 @@ class FooServer(Foo):
 
         return JSONResponse(_ret)
 
+    async def _stream_req(self, websocket):
+        """Request for function:
+        stream(self, a: str, num: int) -> Iterator[str]
+        """
+
+        await websocket.accept()
+        headers = websocket.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        # Process incoming messages
+        qs = urllib.parse.parse_qs(str(websocket.query_params))
+
+        _jdict = {}
+        if "data" in qs and len(qs["data"]) > 0:
+            _jdict = json.loads(qs["data"][0])
+
+        print("jdict: ", _jdict)
+        for _ret in self.stream(**_jdict):
+            _ret = {"response": _ret}
+
+            print("seding json")
+            await websocket.send_json(_ret)
+            print("sent")
+
+        print("all done sending data, closing socket")
+        await websocket.close()
+
     async def _sync_req(self, request):
         """Request for function:
         sync(self) -> None
@@ -278,28 +376,6 @@ class FooServer(Foo):
         self._check_lock(headers)
 
         _ret = self.sync(**_jdict)
-        _ret = {"response": None}
-
-        return JSONResponse(_ret)
-
-    async def _test_req(self, request):
-        """Request for function:
-        test(self) -> None
-        """
-
-        body = await request.body()
-        print("len body: ", len(body))
-        print("body: ", body)
-
-        _jdict = {}
-        if len(body) != 0:
-            _jdict = json.loads(body)
-
-        headers = request.headers
-        logging.debug(f"headers: {headers}")
-        self._check_lock(headers)
-
-        _ret = self.test(**_jdict)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -633,7 +709,9 @@ class FooServer(Foo):
 
     def _routes(self) -> List[BaseRoute]:
         return [
+            Route("/add", endpoint=self._add_req, methods=["POST"]),
             Route("/diff", endpoint=self._diff_req, methods=["POST"]),
+            Route("/echo", endpoint=self._echo_req, methods=["POST"]),
             Route("/health", endpoint=self._health_req, methods=["GET", "POST"]),
             Route("/info", endpoint=self._info_req, methods=["POST"]),
             Route("/lock", endpoint=self._lock_req, methods=["POST"]),
@@ -641,10 +719,11 @@ class FooServer(Foo):
             Route("/merge", endpoint=self._merge_req, methods=["POST"]),
             Route("/notebook", endpoint=self._notebook_req, methods=["POST"]),
             Route("/save", endpoint=self._save_req, methods=["POST"]),
+            Route("/set", endpoint=self._set_req, methods=["POST"]),
             Route("/source", endpoint=self._source_req, methods=["POST"]),
             Route("/store", endpoint=self._store_req, methods=["POST"]),
+            WebSocketRoute("/stream", endpoint=self._stream_req),
             Route("/sync", endpoint=self._sync_req, methods=["POST"]),
-            Route("/test", endpoint=self._test_req, methods=["POST"]),
             Route("/unlock", endpoint=self._unlock_req, methods=["POST"]),
             Route("/base_names", endpoint=self._base_names_req, methods=["POST"]),
             Route(
@@ -663,13 +742,13 @@ class FooServer(Foo):
         ]
 
 
-o = FooServer.from_env()
+o = BarServer.from_env()
 pkgs = o._reload_dirs()
 
 app = Starlette(routes=o._routes())
 
 # self.schemas = SchemaGenerator(
-#     {"openapi": "3.0.0", "info": {"title": Foo, "version": o.scm.sha()}}
+#     {"openapi": "3.0.0", "info": {"title": Bar, "version": o.scm.sha()}}
 # )
 
 if __name__ == "__main__":

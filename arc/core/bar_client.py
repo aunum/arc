@@ -1,6 +1,7 @@
 from urllib import request, parse
 import json
 import logging
+import urllib
 
 from arc.core.resource import Client
 import typing
@@ -13,7 +14,40 @@ import simple_parsing.helpers.serialization.serializable
 import arc.config
 
 
-class FooClient(Client):
+class BarClient(Client):
+    def __init__(self, a: str, b: int, **kwargs) -> None:
+        """A Bar resource
+
+        Args:
+            a (str): A string
+            b (int): An int
+        """
+        super().__init__(a=a, b=b, **kwargs)
+
+    def add(self, x: int, y: int) -> int:
+        """Add x to y
+
+        Args:
+            x (int): Number
+            y (int): Number
+
+        Returns:
+            int: Sum
+        """
+
+        _params = json.dumps({"x": x, "y": y}).encode("utf8")
+        _req = request.Request(
+            f"{self.server_addr}/add",
+            data=_params,
+            headers={"content-type": "application/json", "client-uuid": str(self.uid)},
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _ret = _jdict["response"]
+
+        return _ret
+
     def diff(self, uri: str) -> str:
         """Diff of the given object from the URI
 
@@ -27,6 +61,29 @@ class FooClient(Client):
         _params = json.dumps({"uri": uri}).encode("utf8")
         _req = request.Request(
             f"{self.server_addr}/diff",
+            data=_params,
+            headers={"content-type": "application/json", "client-uuid": str(self.uid)},
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _ret = _jdict["response"]
+
+        return _ret
+
+    def echo(self, txt: str) -> str:
+        """Echo a string back
+
+        Args:
+            txt (str): String to echo
+
+        Returns:
+            str: String echoed with a hello
+        """
+
+        _params = json.dumps({"txt": txt}).encode("utf8")
+        _req = request.Request(
+            f"{self.server_addr}/echo",
             data=_params,
             headers={"content-type": "application/json", "client-uuid": str(self.uid)},
         )
@@ -127,7 +184,7 @@ class FooClient(Client):
             (f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port)
         )
 
-        _encoded = parse.urlencode({})
+        _encoded = urllib.parse.urlencode({"data": json.dumps({})})
         _ws = create_connection(
             f"ws://{_server_addr}/logs?{_encoded}",
             header=[f"client-uuid: {str(self.uid)}"],
@@ -135,12 +192,10 @@ class FooClient(Client):
         )
         try:
             while True:
-                _, _data = _ws.recv_data()
-
-                _jdict = json.loads(_data)
-                _end = _jdict["end"]
-                if _end:
+                code, _data = _ws.recv_data()
+                if code == 8:
                     break
+                _jdict = json.loads(_data)
                 _ret = _jdict["response"]
 
                 yield _ret
@@ -208,6 +263,27 @@ class FooClient(Client):
 
         return _ret
 
+    def set(self, a: str, b: int) -> None:
+        """Set the params
+
+        Args:
+            a (str): A string
+            b (int): An int
+        """
+
+        _params = json.dumps({"a": a, "b": b}).encode("utf8")
+        _req = request.Request(
+            f"{self.server_addr}/set",
+            data=_params,
+            headers={"content-type": "application/json", "client-uuid": str(self.uid)},
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _ret = _jdict["response"]
+
+        return _ret
+
     def source(self) -> str:
         """Source code for the object"""
 
@@ -250,28 +326,51 @@ class FooClient(Client):
 
         return _ret
 
+    def stream(self, a: str, num: int) -> typing.Iterator[str]:
+        """Stream back the string for the given number of times
+
+        Args:
+            a (str): String to stream
+            num (int): Number of times to return
+
+        Yields:
+            Iterator[str]: An iterator
+        """
+        _server_addr = (
+            f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{self.server_port}"
+        )
+
+        # you need to create your own socket here
+        _sock = socket.create_connection(
+            (f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port)
+        )
+
+        _encoded = urllib.parse.urlencode({"data": json.dumps({"a": a, "num": num})})
+        _ws = create_connection(
+            f"ws://{_server_addr}/stream?{_encoded}",
+            header=[f"client-uuid: {str(self.uid)}"],
+            socket=_sock,
+        )
+        try:
+            while True:
+                code, _data = _ws.recv_data()
+                if code == 8:
+                    break
+                _jdict = json.loads(_data)
+                _ret = _jdict["response"]
+
+                yield _ret
+
+        except Exception as e:
+            print("stream exception: ", e)
+            raise e
+
     def sync(self) -> None:
         """Sync changes to a remote process"""
 
         _params = json.dumps({}).encode("utf8")
         _req = request.Request(
             f"{self.server_addr}/sync",
-            data=_params,
-            headers={"content-type": "application/json", "client-uuid": str(self.uid)},
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
-
-    def test(self) -> None:
-        """A test function"""
-
-        _params = json.dumps({}).encode("utf8")
-        _req = request.Request(
-            f"{self.server_addr}/test",
             data=_params,
             headers={"content-type": "application/json", "client-uuid": str(self.uid)},
         )

@@ -199,41 +199,25 @@ class Kind(ABC):
         """Delete the resource"""
         pass
 
+    @classmethod
     @abstractmethod
-    def develop(
-        self: K,
+    def client(
+        cls: Type[K],
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
-    ) -> K:
+        hot: bool = False,
+    ) -> Type[K]:
         """Develop on the object remotely, hot reloading code changes
 
         Args:
             clean (bool, optional): Whether to clean generate files. Defaults to True.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             reuse (bool, optional): Whether to reuse existing processes. Defaults to True.
+            hot (bool, optional): Whether to hot reload changes
 
         Returns:
-            Kind: A Kind
-        """
-        pass
-
-    @abstractmethod
-    def deploy(
-        self: K,
-        clean: bool = True,
-        dev_dependencies: bool = False,
-        reuse: bool = True,
-    ) -> K:
-        """Deploy the object remotely as a hardened artifact
-
-        Args:
-            clean (bool, optional): Whether to clean generate files. Defaults to True.
-            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
-            reuse (bool, optional): Whether to reuse existing processes. Defaults to True.
-
-        Returns:
-            Kind: A Kind
+            Type[Kind]: A type of Kind
         """
         pass
 

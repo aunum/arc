@@ -1,7 +1,7 @@
 from __future__ import annotations
 import collections
 from dataclasses import dataclass
-from http import server
+import enum
 import shutil
 from types import NoneType
 import types
@@ -20,7 +20,7 @@ import os
 import yaml
 from pathlib import Path
 import uuid
-from functools import wraps
+from functools import wraps, partialmethod
 from types import FunctionType
 from inspect import Parameter, signature
 import importlib
@@ -62,7 +62,6 @@ from kubernetes.client.models import (
 from kubernetes.client import CoreV1Api, V1ObjectMeta, RbacAuthorizationV1Api
 from docker.utils.utils import parse_repository_tag
 from docker.auth import resolve_repository_name
-from typing_inspect import is_generic_type
 from black import format_str, FileMode
 
 from arc.kube.sync import copy_file_to_pod
@@ -131,18 +130,22 @@ class Client(Kind):
         self,
         uri: Optional[str] = None,
         server: Optional[Union[Type["Resource"], "Resource"]] = None,
-        reuse: bool = True,
+        reuse: bool = False,
         core_v1_api: Optional[CoreV1Api] = None,
         rbac_v1_api: Optional[RbacAuthorizationV1Api] = None,
         docker_socket: Optional[str] = None,
         namespace: Optional[str] = None,
         cfg: Optional[Config] = None,
         scm: Optional[SCM] = None,
-        sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
+        hot: bool = False,
         dev_dependencies: bool = False,
         clean: bool = True,
         **kwargs,
     ) -> None:
+
+        sync_strategy = RemoteSyncStrategy.IMAGE
+        if hot:
+            sync_strategy = RemoteSyncStrategy.CONTAINER
 
         params: Optional[Dict[str, Any]] = None
         if len(kwargs) != 0:
@@ -187,8 +190,7 @@ class Client(Kind):
         if namespace is None:
             namespace = cfg.kube_namespace
 
-        if self.uid is None:
-            self.uid = uuid.uuid4()
+        self.uid = uuid.uuid4()
 
         self._patch_socket(core_v1_api)
 
@@ -207,12 +209,12 @@ class Client(Kind):
             if isinstance(server, Resource):
                 if "_kwargs" in server.__dict__:
                     params = server._kwargs  # type: ignore
+        elif hasattr(self, "uri"):
+            pass
         else:
             if uri is None:
                 raise ValueError("Client URI cannot be none. Either 'uri' or 'server' must be provided")
             self.uri = uri
-
-        print("client uri: ", self.uri)
 
         # Check schema compatibility between client/server https://github.com/aunum/arc/issues/12
         self.artifact_labels = get_img_labels(self.uri)
@@ -222,7 +224,7 @@ class Client(Kind):
 
         if reuse:
             # check if container exists
-            logging.info("checking if model is already running in cluster")
+            logging.info("checking if server is already running in cluster")
             found_pod = self._find_reusable_pod(namespace)
             if found_pod is not None:
                 logging.info("found reusable server running in cluster")
@@ -231,8 +233,16 @@ class Client(Kind):
                 self.pod_name = pod_name
                 self.pod_namespace = namespace
                 annotations = found_pod.metadata.annotations
-                logging.info(f"server info: {self.info()}")
-                if sync_strategy == RemoteSyncStrategy.CONTAINER:
+
+                is_working = True
+                try:
+                    info = self.info()
+                    logging.info(f"server info: {info}")
+                except:  # noqa
+                    logging.info("found server not functioning")
+                    is_working = False
+
+                if sync_strategy == RemoteSyncStrategy.CONTAINER and is_working:
                     logging.info("sync strategy is container")
                     if SYNC_SHA_LABEL in annotations:
                         if annotations[SYNC_SHA_LABEL] == scm.sha():
@@ -241,7 +251,7 @@ class Client(Kind):
 
                     logging.info("sync sha doesn't match, syncing files")
                     self._sync_to_pod(server, found_pod, namespace=namespace)
-                return
+                    return
 
             logging.info("server not found running, deploying now...")
 
@@ -277,6 +287,8 @@ class Client(Kind):
         socket_create_connection = socket.create_connection
 
         def kubernetes_create_connection(address, *args, **kwargs):
+            print("patching address: ", address)
+            print("uri: ", self.uri)
             dns_name = address[0]
             if isinstance(dns_name, bytes):
                 dns_name = dns_name.decode()
@@ -296,9 +308,15 @@ class Client(Kind):
                 addr = f"{ipstr}.{namespace}.pod.cluster.local"
                 return socket_create_connection((addr, port), *args, **kwargs)
 
-            pf = portforward(
-                core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(SERVER_PORT)
-            )
+            try:
+                pf = portforward(
+                    core_v1_api.connect_get_namespaced_pod_portforward, name, namespace, ports=str(SERVER_PORT)
+                )
+            except Exception as e:
+                logging.error(
+                    f"Trouble connecting to pod '{name}' in namespace '{namespace}'; check to see if pod is running. \n {e}"
+                )  # noqa
+                raise
             return pf.socket(int(port))
 
         socket.create_connection = kubernetes_create_connection
@@ -315,6 +333,7 @@ class Client(Kind):
         logging.info("checking if server is already running in cluster")
         pod_list: V1PodList = self.core_v1_api.list_namespaced_pod(namespace)
         found_pod: Optional[V1Pod] = None
+        pod: V1Pod
         for pod in pod_list.items:
             annotations = pod.metadata.annotations
             if annotations is None:
@@ -326,6 +345,8 @@ class Client(Kind):
                     if server_owner != get_client_id():
                         logging.warning("found server running in cluster but owner is not current user")
                     found_pod = pod
+            status: V1PodStatus = pod.status
+            print("\n!!! pod status: ", status)
         return found_pod
 
     def _sync_to_pod(
@@ -344,7 +365,7 @@ class Client(Kind):
         if server is None:
             raise ValueError("server cannot be None when doing a container sync")
 
-        server_path = server._server_entrypoint()
+        server_path = server._write_server_file()
         logging.info(f"wrote server to path: {server_path}")
         pod_name = pod.metadata.name
         copy_file_to_pod(
@@ -501,6 +522,15 @@ class Client(Kind):
         return po
 
     @classmethod
+    def opts(cls) -> Optional[Type[Serializable]]:
+        """Options for the server
+
+        Returns:
+            Optional[Type[Serializable]]: Options for the server
+        """
+        return OptsBuilder[Serializable].build(cls)
+
+    @classmethod
     def find(cls, locator: ObjectLocator) -> List[str]:
         """Find objects
 
@@ -565,6 +595,42 @@ class Client(Kind):
         """Source code for the object"""
         pass
 
+    def delete(self) -> None:
+        """Delete the resource"""
+        if not hasattr(self, "core_v1_api") or (hasattr(self, "core_v1_api") and self.core_v1_api is None):
+            if is_k8s_proc():
+                config.load_incluster_config()
+            else:
+                config.load_kube_config()
+
+            self.core_v1_api = CoreV1Api()
+
+        # TODO: maybe it should delte itself https://stackoverflow.com/questions/293431/python-object-deleting-itself
+        # or we could just add a 'deleted' attribute and alert if a method is called
+        self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
+
+    @classmethod
+    def client(
+        cls: Type[R],
+        clean: bool = True,
+        dev_dependencies: bool = False,
+        reuse: bool = True,
+        hot: bool = False,
+    ) -> Type[R]:
+        """Create a client of the class, which will allow for the generation of instances remotely
+
+        Args:
+            clean (bool, optional): Whether to clean generated files. Defaults to True.
+            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
+            reuse (bool, optional): Whether to reuse existing processes. Defaults to True.
+            hot (bool, optional): Hot reload code remotely
+
+        Returns:
+            Client: A client which can generate servers on object initialization
+        """
+        # TODO: this should roughly be a copy
+        raise NotImplementedError("client already initialized")
+
     def store(self, dev_dependencies: bool = False, clean: bool = True) -> str:  # TODO: make this a generator
         """Store the resource
 
@@ -575,13 +641,13 @@ class Client(Kind):
         Returns:
             str: URI of the saved server
         """
-        if self.core_v1_api is None:
+        if not hasattr(self, "core_v1_api") or (hasattr(self, "core_v1_api") and self.core_v1_api is None):
             if is_k8s_proc():
                 config.load_incluster_config()
             else:
                 config.load_kube_config()
 
-            core_v1_api = CoreV1Api()
+            self.core_v1_api = CoreV1Api()
 
         logging.info("saving server...")
 
@@ -644,7 +710,7 @@ class Client(Kind):
             }
         }
 
-        core_v1_api.api_client.call_api(
+        self.core_v1_api.api_client.call_api(
             "/api/v1/namespaces/{namespace}/pods/{name}/ephemeralcontainers",
             "PATCH",
             path_params,
@@ -662,7 +728,7 @@ class Client(Kind):
         done = False
 
         while not done:
-            pod: V1Pod = core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
+            pod: V1Pod = self.core_v1_api.read_namespaced_pod(self.pod_name, self.pod_namespace)
             status: V1PodStatus = pod.status
 
             if status.ephemeral_container_statuses is None:
@@ -705,6 +771,12 @@ class Client(Kind):
 
         return True
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.delete()
+
 
 def init_wrapper(method):
     """Init wrapper stores the args provided on object creation so that they
@@ -724,7 +796,7 @@ def init_wrapper(method):
 
 
 def local(method):
-    """Local wrapper"""
+    """Local wrapper prevents generating a server method"""
     method.local = True
     return method
 
@@ -735,18 +807,50 @@ def nolock(method):
     return method
 
 
+def methods(methods: List[str]):
+    """Wrapper to specify HTTP action to use"""
+
+    def wrapper(method):
+        method.methods = methods
+        return method
+
+    return wrapper
+
+
+def partialcls(cls, *args, **kwds):
+    """Just like functools.partial but for classes"""
+
+    class NewCls(cls):
+        __init__ = partialmethod(cls.__init__, *args, **kwds)
+
+    return NewCls
+
+
+def convert_hot_to_strategy(hot: bool) -> RemoteSyncStrategy:
+    if hot:
+        return RemoteSyncStrategy.CONTAINER
+    return RemoteSyncStrategy.IMAGE
+
+
+def convert_strategy_to_hot(strategy: RemoteSyncStrategy) -> bool:
+    if strategy == RemoteSyncStrategy.IMAGE:
+        return False
+    elif strategy == RemoteSyncStrategy.CONTAINER:
+        return True
+
+    else:
+        raise ValueError("unknown sync strategy: ", strategy)
+
+
 class ResourceMetaClass(type):
     """Resource metaclass is the metaclass for the Resource type"""
 
     def __new__(meta, classname, bases, classDict):
         newClassDict = {}
-        routes: List[str] = []
 
         for attributeName, attribute in classDict.items():
-            print("============ ", attributeName)
             if isinstance(attribute, FunctionType):
                 if hasattr(attribute, "local"):
-                    print("!!! ignoring: ", attributeName)
                     continue
 
                 if attributeName.startswith("__"):
@@ -755,97 +859,8 @@ class ResourceMetaClass(type):
                 if attributeName == "__init__":
                     attribute = init_wrapper(attribute)
 
-                elif not attributeName.startswith("_"):
-                    print("attribute: ", attribute)
-                    print("type attr: ", type(attribute))
-                    print("sig: ", signature(attribute))
-                    print("sig params: ", signature(attribute).parameters)
-                    load_lines = []
-                    sig = signature(attribute)
-                    for k in sig.parameters:
-                        print("k", k)
-                        if k == "self":
-                            continue
-                        param = sig.parameters[k]
-                        print("param annot: ", param.annotation)
-                        _op = getattr(param.annotation, "from_dict", None)
-                        print("_op: ", _op)
-                        if callable(_op):
-                            print("!!!! callable")
-                            load_lines.append(f"jdict['{k}'] = {param.annotation.__name__}.from_dict(jdict['{k}'])")
-
-                    hints = get_type_hints(attribute)
-                    ret = hints["return"]
-
-                    ret_op = getattr(ret, "to_dict", None)
-                    ser_line = ""
-                    print("ret_op: ", ret_op)
-
-                    joined_load_lines = "\n".join(load_lines)
-                    if isinstance(ret, Iterable):
-                        print("is iterable!")
-                        args = get_args(ret)
-                        print("iterable args: ", args)
-                        if len(args) == 0:
-                            raise SystemError("args for iterable are None")
-                        if len(args) > 1:
-                            raise ValueError("Iterable with args greater than one not currently supported")
-
-                        arg = args[0]
-                        arg_op = getattr(arg, "to_dict", None)
-                        if callable(arg_op):
-                            ser_line = "ret = ret.to_dict()"
-
-                        req_code = f"""
-async def _{attributeName}_req(self, websocket):
-    await websocket.accept()
-
-    # Process incoming messages
-    jdict = websocket.query_params
-    {joined_load_lines}
-
-    for ret in self.{attributeName}(**jdict):
-        {ser_line}
-        print("seding json")
-        await websocket.send_json(ret)
-        print("sent")
-
-    print("sending end")
-    await websocket.send_json({{"end": True}})
-    print("all done sending data, closing socket")
-    await websocket.close()
-                        """
-                        routes.append(f"WebsocketRoute('/{attributeName}', endpoint=self._{attributeName}_req)")
-
-                    else:
-                        print("is NOT iterable")
-                        if callable(ret_op):
-                            ser_line = "ret = ret.to_dict()"
-
-                        req_code = f"""
-async def _{attributeName}_req(self, request):
-    jdict = await request.json()
-    {joined_load_lines}
-    ret = self.{attributeName}(**jdict)
-    {ser_line}
-    return JSONResponse(ret)
-"""
-                        routes.append(f"Route('/{attributeName}', endpoint=self._{attributeName}_req)")
-
-                    print("req code: ", req_code)
-                    exec(req_code)
-                    newClassDict[f"_{attributeName}_req"] = eval(f"_{attributeName}_req")
-                    print("new class dict: ", newClassDict)
             newClassDict[attributeName] = attribute
 
-        routes_joined = ", ".join(routes)
-        route_code = f"""
-def _routes(self) -> List[Route]:
-    return [{routes_joined}]
-"""
-        print("route code: ", route_code)
-        exec(route_code)
-        newClassDict["_routes"] = eval("_routes")  # type: ignore # noqa: F821
         return type.__new__(meta, classname, bases, newClassDict)
 
 
@@ -860,6 +875,8 @@ def is_iterable_cls(t: Type) -> bool:
     orig = get_origin(t)
     if orig is not None:
         if orig == collections.abc.Iterable:
+            return True
+        if orig == collections.abc.Iterator:
             return True
 
     return False
@@ -924,7 +941,7 @@ R = TypeVar("R", bound="Resource")
 
 
 # TODO: can we get rid or APIUtil?
-class Resource(Kind, APIUtil, metaclass=CombinedMeta):
+class Resource(Kind, APIUtil):
     """A resource that can be built and ran remotely over HTTP"""
 
     last_used_ts: float
@@ -982,9 +999,9 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
                 args = parser.parse_args()
                 srv = cls.from_opts(args.server)
 
-        uri = os.getenv("ARTIFACT_URI")
+        uri = os.getenv(OBJECT_URI_ENV)
         if uri is None:
-            logging.warning("$ARTIFACT_URI var not found, defaulting to class uri")
+            logging.warning(f"${OBJECT_URI_ENV} var not found, defaulting to class uri")
         else:
             srv.uri = uri
 
@@ -1001,6 +1018,8 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         Returns:
             str: Name of the server
         """
+        if cls.__name__.endswith("Server"):
+            return cls.__name__.removesuffix("Server")
         return cls.__name__
 
     @nolock
@@ -1011,6 +1030,8 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         Returns:
             str: A short name
         """
+        if cls.__name__.endswith("Server"):
+            return cls.__name__.removesuffix("Server").lower()
         return cls.__name__.lower()
 
     @nolock
@@ -1039,12 +1060,13 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
             Dict[str, Any]: Resource info
         """
         return {
-            "name": self.__class__.__name__,
+            "name": self.name(),
             "version": self.scm.sha(),
             "env-sha": self.scm.env_sha(),
             "uri": self.uri,
         }
 
+    @methods(["GET", "POST"])
     @nolock
     def health(self) -> Dict[str, Any]:
         """Health of the resource
@@ -1054,6 +1076,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         """
         return {"health": "ok"}
 
+    @local
     def delete(self) -> None:
         """Delete the resource"""
         raise NotImplementedError()
@@ -1085,7 +1108,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
 
         base_labels = {
             BASES_LABEL: json.dumps(base_names),
-            NAME_LABEL: cls.__name__,
+            NAME_LABEL: cls.name(),
             VERSION_LABEL: cls.scm.sha(),
             PARAMS_SCHEMA_LABEL: json.dumps(cls.opts_schema()),
             ENV_SHA_LABEL: cls.scm.env_sha(),
@@ -1194,6 +1217,7 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         # TODO: does this make sense?
         raise NotImplementedError("this method only works on client objects")
 
+    @local
     def copy(self) -> PID:
         """Copy the process
 
@@ -1216,27 +1240,22 @@ class Resource(Kind, APIUtil, metaclass=CombinedMeta):
         raise NotImplementedError()
 
     @classmethod
-    def client_cls(cls) -> Type[Client]:
+    def _client_cls(cls) -> Type[Client]:
         """Class of the client for the resource
 
         Returns:
             Type[Client]: A client class for the server
         """
         # TODO: need to generate this
-        print("writing client file...")
         cls._write_client_file()
 
-        print("\n================\n####################\n================\n")
-        print("writing server file")
         cls._write_server_file()
 
         mod = importlib.import_module(f".{cls._client_file_name()}", package=__package__)  # noqa: F841
-        print("mod: ", mod)
+
         # exec(f"from .{cls._client_file_name()} import {cls.__name__}Client")
         loc_copy = locals().copy()
-        print("loc copy: ", loc_copy)
         client_cls: Type[Client] = eval(f"mod.{cls.__name__}Client", loc_copy)
-        print("client cls: ", client_cls)
         return client_cls
 
     @classmethod
@@ -1361,9 +1380,11 @@ if __name__ == "__main__":
         Returns:
             str: A URI for the resource
         """
-        if self._uri is None:
-            return f"{self.__module__}.{self.__class__.__name__}"
-        return self._uri
+
+        if hasattr(self, "_uri"):
+            return self._uri
+
+        return f"{self.__module__}.{self.__class__.__name__}"
 
     @uri.setter
     def uri(self, val: str):
@@ -1376,57 +1397,40 @@ if __name__ == "__main__":
         """Launch a notebook for the object"""
         raise NotImplementedError()
 
-    def deploy(
-        self: Resource,
-        scm: Optional[SCM] = None,
-        clean: bool = True,
-        dev_dependencies: bool = False,
-        sync_strategy: RemoteSyncStrategy = RemoteSyncStrategy.IMAGE,
-        **kwargs,
-    ) -> Resource:
-        """Create a deployment of the class, which will allow for the generation of instances remotely
-
-        Args:
-            scm (Optional[SCM], optional): SCM to use. Defaults to None.
-            clean (bool, optional): Whether to clean generated files. Defaults to True.
-            dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
-            sync_strategy (RemoteSyncStrategy, optional): Sync strategy to use. Defaults to RemoteSyncStrategy.IMAGE.
-
-        Returns:
-            Client: A client for the server
-        """
-
-        imgid = self.store_cls(scm, clean, dev_dependencies)
-        return self.client_cls()(  # type: ignore
-            uri=imgid, sync_strategy=sync_strategy, clean=clean, scm=scm, dev_dependencies=dev_dependencies, **kwargs
-        )
-
-    def develop(
-        self: Resource,
+    @classmethod
+    def client(
+        cls: Type[R],
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
-        **kwargs,
-    ) -> Resource:
-        """Create a deployment of the class, and sync local code to it
+        hot: bool = False,
+    ) -> Type[R]:
+        """Create a client of the class, which will allow for the generation of instances remotely
 
         Args:
             clean (bool, optional): Whether to clean generated files. Defaults to True.
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
-            reuse (bool, optional): Whether to reuse existing running servers. Defaults to True.
+            reuse (bool, optional): Whether to reuse existing processes. Defaults to True.
+            hot (bool, optional): Hot reload code remotely
 
         Returns:
-            Client: A client for the server
+            Client: A client which can generate servers on object initialization
         """
-        return self.client_cls()(  # type: ignore
-            server=self,
-            sync_strategy=RemoteSyncStrategy.CONTAINER,
-            clean=clean,
+
+        # imgid = cls.store_cls(
+        #     clean=clean, dev_dependencies=dev_dependencies, sync_strategy=convert_hot_to_strategy(hot)
+        # )
+
+        client_cls = partialcls(
+            cls._client_cls(),
+            server=cls,
             reuse=reuse,
+            clean=clean,
             dev_dependencies=dev_dependencies,
-            scm=self.scm,
-            **kwargs,
+            hot=hot,
+            scm=cls.scm,
         )
+        return client_cls
 
     @local
     @classmethod
@@ -1493,7 +1497,7 @@ if __name__ == "__main__":
         """
 
         # write the server file somewhere we can find it
-        server_filepath = Path(cls._server_entrypoint())
+        server_filepath = Path(cls._write_server_file())
         repo_root = Path(str(cls.scm.git_repo.working_dir))
         root_relative = server_filepath.relative_to(repo_root)
         container_path = Path(REPO_ROOT).joinpath(root_relative)
@@ -1508,7 +1512,7 @@ if __name__ == "__main__":
             imgid = find_or_build_img(
                 sync_strategy=RemoteSyncStrategy.IMAGE,
                 command=img_command(str(container_path)),
-                tag_prefix=f"{cls.short_name().lower()}",
+                tag_prefix=f"{cls.short_name().lower()}-",
                 labels=base_labels,
                 dev_dependencies=dev_dependencies,
                 clean=clean,
@@ -1522,6 +1526,9 @@ if __name__ == "__main__":
                 dev_dependencies=dev_dependencies,
                 clean=clean,
             )
+        else:
+            raise ValueError("unkown sync strategy: ", sync_strategy)
+
         if clean:
             os.remove(server_filepath)
 
@@ -1642,6 +1649,18 @@ if __name__ == "__main__":
                     ret.append(f"{repo_uri}:{tag}")
         return ret
 
+    def _get_class_that_defined_method(fn):
+        if inspect.ismethod(fn):
+            for cls in inspect.getmro(fn.__self__.__class__):
+                if fn.__name__ in cls.__dict__:
+                    return cls
+            fn = fn.__func__  # fallback to __qualname__ parsing
+        if inspect.isfunction(fn):
+            cls = getattr(inspect.getmodule(fn), fn.__qualname__.split(".<locals>", 1)[0].rsplit(".", 1)[0], None)
+            if isinstance(cls, type):
+                return cls
+        return None
+
     @classmethod
     def _gen_server(cls) -> str:
         routes: List[str] = []
@@ -1661,14 +1680,11 @@ if __name__ == "__main__":
             default: Optional[Any] = None,
             optional_dict: Optional[Dict[str, Any]] = None,
         ) -> None:
-            print("--------")
-            print("type: ", t)
             if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
             if t in [int, list, str, float, bool]:
-                print("basic type")
                 return
 
             if optional_dict is None:
@@ -1691,16 +1707,12 @@ if __name__ == "__main__":
             # we should look to how openapi does this? and maybe use the openapi generator if we like it
             # Do we need to make sure the spec that is generated is the same as the python code?
             if hasattr(t, "__origin__"):
-                print("has origin!")
                 # TODO: check dict types
                 if t.__origin__ == dict:
-                    print("dict!")
                     return
 
                 if t.__origin__ == typing.Union:
-                    print("union!")
                     args = typing.get_args(t)
-                    print("args: ", args)
 
                     if len(args) == 0:
                         logging.warning("found union with no args")
@@ -1724,7 +1736,7 @@ if __name__ == "__main__":
                             continue
 
                         elif arg == NoneType:
-                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
+                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) is {h}:", idt))
                             load_lines.append(indent("    pass", idt))
                             continue
 
@@ -1747,19 +1759,30 @@ if __name__ == "__main__":
 
                         else:
                             raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
-                        # load_lines.append(indent("    _deserialized = True", idt))
-                        # load_lines.append(indent("except:  # noqa", idt))
-                        # load_lines.append(indent("    logging.warning('tried to serialize')", idt))
 
                     load_lines.append(indent("else:", idt))
-                    # load_lines.append(indent("if not _deserialized:", idt))
                     load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {key}')", idt))
                     load_lines.append("")
 
                     return
+                if t.__origin__ == tuple:
+                    # Tuple need to recurse through
+                    raise TypeNotSupportedError()
+                    # args = typing.get_args(t)
+                    # for arg in args:
+                    #     pass
+                    # pass
+
+            if t == typing.Any:
+                # TODO: handle any types, may need some basic checks similar to Union
+                return
+
+            h = cls._build_hint(t, import_statements)
+            if issubclass(t, enum.Enum):
+                load_lines.append(indent(f"_jdict['{key}'] = {h}(_jdict['{k}'])", idt))
+                return
 
             if hasattr(t, "__dict__"):
-                print("dict!")
                 h = cls._build_hint(t, import_statements)
                 load_lines.append("")
                 load_lines.append(indent(f"_obj = object.__new__({h})", idt))
@@ -1771,7 +1794,7 @@ if __name__ == "__main__":
             return
 
         def proc_return(ret: Type, ret_lines: List[str], idt: str = "") -> None:
-            if ret == typing.Type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+            if ret == typing.Type or ret == type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
@@ -1801,7 +1824,7 @@ if __name__ == "__main__":
 
                         h = cls._build_hint(arg, import_statements)
 
-                        if ret == typing.Type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
+                        if ret == typing.Type or ret == type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
                             logging.warning("types not yet supported as parameters")
                             raise TypeNotSupportedError()
 
@@ -1811,7 +1834,7 @@ if __name__ == "__main__":
                             continue
 
                         elif arg == NoneType:
-                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
+                            load_lines.append(indent(f"{if_line} _ret is {h}:", idt))
                             load_lines.append(indent("    _ret = {'response': None}", idt))
                             continue
 
@@ -1829,26 +1852,28 @@ if __name__ == "__main__":
 
                         else:
                             raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
-                        # load_lines.append(indent("    _deserialized = True", idt))
-                        # load_lines.append(indent("except:  # noqa", idt))
-                        # load_lines.append(indent("    logging.warning('tried to serialize')", idt))
 
                     load_lines.append(indent("else:", idt))
-                    # load_lines.append(indent("if not _deserialized:", idt))
                     load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {ret}')", idt))
                     load_lines.append("")
-
-                    # for arg in args:
-                    #     lines.append(indent("try:", idt))
-                    #     proc_return(arg, ret_lines, "    ")
-                    #     lines.append(indent("_serialized = True", idt))
-                    #     lines.append(indent("except:", idt))
-                    #     lines.append(indent("    logging.warning('tried to serialize')", idt))
-                    #     lines.append(indent("if not _serialized: raise SystemError('could not be serialized')", idt))
-                    #     ret_lines.extend(lines)
+                    return
+                else:
+                    # Standard generic type
+                    # TODO: handle
+                    ret_lines.append(indent("_ret = _ret.__dict__", idt))
+                    return
 
             if hasattr(ret, "to_dict"):
                 ret_lines.append(indent("_ret = _ret.to_dict()", idt))
+                return
+
+            if hasattr(ret, "__bound__"):
+                ret = eval(ret.__bound__.__forward_arg__)
+                proc_return(ret, ret_lines, idt)
+                return
+
+            if issubclass(ret, enum.Enum):
+                ret_lines.append(indent("_ret = {'response': _ret}", idt))
                 return
 
             if hasattr(ret, "__dict__"):
@@ -1857,10 +1882,13 @@ if __name__ == "__main__":
 
             return
 
+            # Need to handle things like mixins --> look at json schema mixin
+
         for name, fn in fns:
-            print("\n\n==============")
-            print("fn: ", fn)
-            print("type fn: ", type(fn))
+            root_cls = cls._get_class_that_defined_method(fn)
+            if not issubclass(root_cls, Resource):
+                # logging.info(f"skipping fn '{name}' as it is not of subclass resource")
+                continue
 
             sig = signature(fn, eval_str=True, follow_wrapped=True)
 
@@ -1918,6 +1946,10 @@ if __name__ == "__main__":
                 logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
                 continue
 
+            check_lock_line = ""
+            if not hasattr(fn, "nolock"):
+                check_lock_line = "self._check_lock(headers)"
+
             if is_iterable:
                 fin_ser_lines = ""
                 for line in ser_lines:
@@ -1935,19 +1967,25 @@ if __name__ == "__main__":
         \"""
 
         await websocket.accept()
-        self._check_lock(websocket.headers)
+        headers = websocket.headers
+        logging.debug(f"headers: {{headers}}")
+        {check_lock_line}
 
         # Process incoming messages
-        _jdict = websocket.query_params
+        qs = urllib.parse.parse_qs(str(websocket.query_params))
+
+        _jdict = {{}}
+        if "data" in qs and len(qs["data"]) > 0:
+            _jdict = json.loads(qs["data"][0])
 {joined_load_lines}
+
+        print("jdict: ", _jdict)
         for _ret in self.{name}(**_jdict):
 {fin_ser_lines}
             print("seding json")
             await websocket.send_json(_ret)
             print("sent")
 
-        print("sending end")
-        await websocket.send_json({{"end": True}})
         print("all done sending data, closing socket")
         await websocket.close()
                 """
@@ -1966,12 +2004,21 @@ if __name__ == "__main__":
                     joined_load_lines += indent(line, "        ")
                 req_code = f"""
     async def _{name}_req(self, request):
-        \"""Request for function: 
+        \"""Request for function:
         {name}{sig}
         \"""
 
-        _jdict = await request.json()
-        self._check_lock(request.headers)
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {{}}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {{headers}}")
+        {check_lock_line}
 
 {joined_load_lines}
         _ret = self.{name}(**_jdict)
@@ -1979,16 +2026,24 @@ if __name__ == "__main__":
         return JSONResponse(_ret)
 """
                 server_fns.append(req_code)
-                routes.append(f"Route('/{name}', endpoint=self._{name}_req)")
 
-            print("req code: ", req_code)
+                if hasattr(fn, "methods"):
+                    liststr = "["
+                    for i, method in enumerate(fn.methods):
+                        liststr += f"'{method}'"
+                        if (i + 1) == len(fn.methods):
+                            continue
+                        liststr += ","
+                    liststr += "]"
+                    routes.append(f"Route('/{name}', endpoint=self._{name}_req, methods={liststr})")
+                else:
+                    routes.append(f"Route('/{name}', endpoint=self._{name}_req, methods=['POST'])")
 
         routes_joined = ", ".join(routes)
         route_code = f"""
     def _routes(self) -> List[BaseRoute]:
         return [{routes_joined}]
 """
-        print("route code: ", route_code)
         server_fns.append(route_code)
 
         cls_file_path = Path(inspect.getfile(cls))
@@ -1999,24 +2054,51 @@ if __name__ == "__main__":
         client_file = f"""
 from typing import List
 import logging
+import os
+import json
+import urllib
 
 # from simple_parsing import ArgumentParser
-# from starlette.applications import Starlette
+from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-# from starlette.schemas import SchemaGenerator
+from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
-# import uvicorn
+import uvicorn
 
-from .{cls_file} import *
-from .{cls_file} import {cls.__name__}
+from {cls_file} import *
+from {cls_file} import {cls.__name__}
 {imports_joined}
+
+log_level = os.getenv("LOG_LEVEL")
+if log_level is None:
+    logging.basicConfig(level=logging.INFO)
+else:
+    logging.basicConfig(level=log_level)
+
 
 class {cls.__name__}Server({cls.__name__}):
 {server_fns_joined}
 
+o = {cls.__name__}Server.from_env()
+pkgs = o._reload_dirs()
+
+app = Starlette(routes=o._routes())
+
+# self.schemas = SchemaGenerator(
+#     {{"openapi": "3.0.0", "info": {{"title": {cls.__name__}, "version": o.scm.sha()}}}}
+# )
+
 if __name__ == "__main__":
-    o = {cls.__name__}Server.from_env()
-    o.serve()
+    logging.info(f"starting server version '{{o.scm.sha()}}' on port: {SERVER_PORT}")
+    uvicorn.run(
+        "__main__:app",
+        host="0.0.0.0",
+        port={SERVER_PORT},
+        log_level="info",
+        workers=1,
+        reload=True,
+        reload_dirs=pkgs.keys(),
+    )
         """
         return client_file
 
@@ -2025,16 +2107,17 @@ if __name__ == "__main__":
         return f"{cls.__name__.lower()}_server"
 
     @classmethod
-    def _write_server_file(cls) -> None:
+    def _write_server_file(cls) -> str:
         """Generate and write the server file next to the current one"""
         filename = f"{cls._server_file_name()}.py"
         dir = os.path.dirname(os.path.abspath(__file__))
         filepath = os.path.join(dir, filename)
-        logging.info(f"writing client file to {filepath}")
+        logging.info(f"writing server file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             server_code = cls._gen_server()
-            # server_code = format_str(server_code, mode=FileMode())
+            server_code = format_str(server_code, mode=FileMode())
             f.write(server_code)
+        return filepath
 
     @classmethod
     def _build_hint(cls, h: Type, imports: Dict[str, Any], module: Optional[str] = None) -> str:
@@ -2116,6 +2199,12 @@ if __name__ == "__main__":
                 logging.warning("types not yet supported as parameters")
                 return ""
 
+            if t == NoneType:
+                return "None"
+
+            if t in [int, list, str, float, bool, bytes]:
+                return name
+
             _op = getattr(t, "to_dict", None)
             if callable(_op):
                 return f"{name}.to_dict()"
@@ -2125,35 +2214,67 @@ if __name__ == "__main__":
 
             return name
 
-        def build_dict(name: str, t: Type, params: List[str], ser_lines: List[str]) -> None:
-            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+        def build_dict(name: str, t: Type, params: List[str], ser_lines: List[str], is_args: bool = False) -> None:
+            if t == typing.Type or t == type or (hasattr(t, "__origin__") and t.__origin__ == type):
                 logging.warning("types not yet supported as parameters")
-                return
+                raise TypeNotSupportedError()
 
             _op = getattr(t, "to_dict", None)
             if callable(_op):
                 params.append(f"'{name}': {get_ser_by_type(name, t)}")
                 return
 
-            if hasattr(t, "__dict__"):
-                params.append(f"'{name}': {name}.__dict__")
+            if is_args:
+                params.append(f"'{name}': {name}")
+                return
+
+            if t in [int, list, str, float, bool, bytes]:
+                params.append(f"'{name}': {name}")
+                return
+
+            if t == NoneType:
+                params.append(f"'{name}': None")
                 return
 
             if hasattr(t, "__origin__"):
-                if t.__origin__ == typing.Union:
+                if t.__origin__ == dict:
+                    params.append(f"'{name}': {name}")
+                    return
+                elif t.__origin__ == list:
+                    params.append(f"'{name}': {name}")
+                    return
+                elif t.__origin__ == typing.Union:
                     # TODO: make this fully recursive
                     args = typing.get_args(t)
+                    if len(args) == 2 and args[1] == NoneType:
+                        # Handle optionals
+                        args = (args[1], args[0])
                     for i, arg in enumerate(args):
+                        h = cls._build_hint(arg, import_statements)
+                        if h == "None":
+                            h = "NoneType"
+                            import_statements["from types import NoneType"] = None
                         if i == 0:
-                            ser_lines.append(f"if isinstance({name}, {arg}):")
+                            ser_lines.append(f"if isinstance({name}, {h}):")
                             ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
                         else:
-                            ser_lines.append(f"elif isinstance({name}, {arg}):")
+                            ser_lines.append(f"elif isinstance({name}, {h}):")
                             ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
                     ser_lines.append("else:")
-                    ser_lines.append("    raise ValueError('Do not know how to serialize object')")
+                    ser_lines.append(f"    raise ValueError(\"Do not know how to serialize parameter '{name}'\")")
                     params.append(f"'{name}': _{name}")
                     return
+
+            try:
+                if issubclass(t, enum.Enum):
+                    params.append(f"'{name}': {name}")
+                    return
+            except:  # noqa
+                pass
+
+            if hasattr(t, "__dict__"):
+                params.append(f"'{name}': {name}.__dict__")
+                return
 
             params.append(f"'{name}': {name}")
             return
@@ -2161,6 +2282,10 @@ if __name__ == "__main__":
         def proc_return(ret: Type, ser_lines: List[str], working_module: str, idt: str = "") -> None:
             ret_op = getattr(ret, "from_dict", None)
             ret_type = cls._build_hint(orig_ret, import_statements, working_module)
+
+            if ret == typing.Type or ret == type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+                logging.warning("types not yet supported as parameters")
+                raise TypeNotSupportedError()
 
             if ret == NoneType:
                 ser_lines.append(indent("_ret = _jdict['response']", idt))
@@ -2172,22 +2297,28 @@ if __name__ == "__main__":
                 ser_lines.append(indent("_ret = _jdict['response']", idt))
             elif ret == dict or (hasattr(ret, "__origin__") and ret.__origin__ == dict):
                 ser_lines.append(indent("_ret = _jdict", idt))
-            elif hasattr(ret, "__origin__") and ret.__origin__ == typing.Union:
-                args = get_args(ret)
-                if len(args) == 0:
-                    raise SystemError("args for iterable are None")
-                ser_lines.append(indent("_deserialized: bool = False", idt))
-                for i, arg in enumerate(args):
-                    # this needs to be recursive
+            elif hasattr(ret, "__origin__"):
+                if ret.__origin__ == typing.Union:
+                    args = get_args(ret)
+                    if len(args) == 0:
+                        raise SystemError("args for iterable are None")
+                    ser_lines.append(indent("_deserialized: bool = False", idt))
+                    for i, arg in enumerate(args):
+                        # this needs to be recursive
+                        ser_lines.append(indent("if not _deserialized:", idt))
+                        ser_lines.append(indent("    try:", idt))
+                        proc_return(arg, ser_lines, working_module, "        ")
+                        ser_lines.append(indent("    except:  # noqa", idt))
+                        ser_lines.append(indent("        pass", idt))
                     ser_lines.append(indent("if not _deserialized:", idt))
-                    ser_lines.append(indent("    try:", idt))
-                    proc_return(arg, ser_lines, working_module, "        ")
-                    ser_lines.append(indent("    except:  # noqa", idt))
-                    ser_lines.append(indent("        pass", idt))
-                ser_lines.append(indent("if not _deserialized:", idt))
-                ser_lines.append(indent("    raise ValueError('unable to deserialize returned value')", idt))
-            elif hasattr(ret, "__origin__") and ret.__origin__ == dict:
-                ser_lines.append(indent("_ret = _jdict", idt))
+                    ser_lines.append(indent("    raise ValueError('unable to deserialize returned value')", idt))
+                else:
+                    # generic origin
+                    ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
+                    ser_lines.append(indent("for k, v in _jdict.items():", idt))
+                    ser_lines.append(indent("    setattr(_ret, k, v)", idt))
+            elif issubclass(ret, enum.Enum):
+                ser_lines.append(indent(f"_ret = {ret_type}(_jdict['response'])", idt))
             else:
                 ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
                 ser_lines.append(indent("for k, v in _jdict.items():", idt))
@@ -2200,12 +2331,18 @@ if __name__ == "__main__":
             return
 
         for name, fn in fns:
+            print("=====\nfn name: ", name)
             params: List[str] = []
+
+            root_cls = cls._get_class_that_defined_method(fn)
+            if not issubclass(root_cls, Resource):
+                # logging.info(f"skipping fn '{name}' as it is not of subclass resource")
+                continue
 
             if hasattr(fn, "local"):
                 continue
 
-            if name.startswith("_"):
+            if name.startswith("_") and name != "__init__":
                 continue
 
             sig = signature(fn, eval_str=True, follow_wrapped=True)
@@ -2236,12 +2373,32 @@ if __name__ == "__main__":
 
                 fin_params.append(fin_param)
 
+            super_params: List[str] = []
+
+            def proc_init(param: Parameter):
+                name = param.name
+                if name == "self":
+                    return
+                super_params.append(f"{name}={name}")
+
             for param in sig.parameters:
-                proc_parameter(sig.parameters[param], import_statements, fn.__module__)
+                try:
+                    proc_parameter(sig.parameters[param], import_statements, fn.__module__)
+                except TypeNotSupportedError:
+                    logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
+                    continue
+                if name == "__init__":
+                    proc_init(sig.parameters[param])
+
+            if name == "__init__":
+                fin_params.append("**kwargs")
+                super_params.append("**kwargs")
 
             params_joined = ", ".join(fin_params)
             fin_sig += params_joined
             fin_sig += ")"
+
+            super_joined = ", ".join(super_params)
 
             param_ser_lines: List[str] = []
 
@@ -2250,7 +2407,11 @@ if __name__ == "__main__":
                     continue
 
                 parameter = sig.parameters[k]
-                build_dict(k, parameter.annotation, params, param_ser_lines)
+                try:
+                    build_dict(k, parameter.annotation, params, param_ser_lines, str(parameter).startswith("*"))
+                except TypeNotSupportedError:
+                    logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
+                    continue
 
             hints = get_type_hints(fn)
 
@@ -2266,7 +2427,6 @@ if __name__ == "__main__":
                 continue
 
             # ser_line = "if hasattr(ret, '__dict__'): ret = ret.__dict__"
-
             is_iterable = is_iterable_cls(ret)
             if is_iterable:
                 args = get_args(ret)
@@ -2287,7 +2447,12 @@ if __name__ == "__main__":
             fin_sig += f" -> {fin_param}:"
 
             ret_ser_lines: List[str] = []
-            proc_return(ret, ret_ser_lines, fn.__module__)
+
+            try:
+                proc_return(ret, ret_ser_lines, fn.__module__)
+            except TypeNotSupportedError:
+                logging.warning(f"function '{name}' will be bypassed as it contains unsupported types")
+                continue
 
             params_joined = ", ".join(params)
 
@@ -2300,7 +2465,14 @@ if __name__ == "__main__":
             if hasattr(fn, "__doc__") and fn.__doc__ is not None:
                 doc = f'"""{fn.__doc__}"""'
 
-            if is_iterable:
+            if name == "__init__":
+                client_fn = f"""
+    {fin_sig}
+        {doc}
+        super().__init__({super_joined})
+                """
+
+            elif is_iterable:
                 import_statements["import socket"] = None
                 import_statements["from websocket import create_connection"] = None
 
@@ -2317,20 +2489,19 @@ if __name__ == "__main__":
         # you need to create your own socket here
         _sock = socket.create_connection((f"{{self.pod_name}}.pod.{{self.pod_namespace}}.kubernetes", self.server_port))
 {param_ser_lines_joined}
-        _encoded = parse.urlencode({{{params_joined}}})
+
+        _encoded = urllib.parse.urlencode({{"data": json.dumps({{{params_joined}}})}})
         _ws = create_connection(
             f"ws://{{_server_addr}}/{name}?{{_encoded}}",
-            header=[f"client-uuid: {{self.uid}}"],
+            header=[f"client-uuid: {{str(self.uid)}}"],
             socket=_sock,
         )
         try:
             while True:
-                _, _data = _ws.recv_data()
-
-                _jdict = json.loads(_data)
-                _end = _jdict["end"]
-                if _end:
+                code, _data = _ws.recv_data()
+                if code == 8:
                     break
+                _jdict = json.loads(_data)
 {ret_ser_lines_joined}
                 yield _ret
 
@@ -2352,7 +2523,7 @@ if __name__ == "__main__":
         _req = request.Request(
             f"{{self.server_addr}}/{name}",
             data=_params,
-            headers={{"content-type": "application/json"}}
+            headers={{"content-type": "application/json", "client-uuid": str(self.uid)}}
         )
         _resp = request.urlopen(_req)
         _data = _resp.read().decode("utf-8")
@@ -2368,11 +2539,13 @@ if __name__ == "__main__":
 from urllib import request, parse
 import json
 import logging
+import urllib
 
 from arc.core.resource import Client
 {imports_joined}
 
 class {cls.__name__}Client(Client):
+
 {client_fns_joined}
         """
 
@@ -2383,7 +2556,7 @@ class {cls.__name__}Client(Client):
         return f"{cls.__name__.lower()}_client"
 
     @classmethod
-    def _write_client_file(cls) -> None:
+    def _write_client_file(cls) -> str:
         """Generate and write the client file next to the current one"""
         filename = f"{cls._client_file_name()}.py"
         dir = os.path.dirname(os.path.abspath(__file__))
@@ -2391,5 +2564,14 @@ class {cls.__name__}Client(Client):
         logging.info(f"writing client file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             client_code = cls._gen_client()
-            # client_code = format_str(client_code, mode=FileMode())
+            client_code = format_str(client_code, mode=FileMode())
             f.write(client_code)
+        return filepath
+
+    def __enter__(self):
+        print("entering!")
+        return self
+
+    def __exit__(self, *args):
+        print("exiting")
+        return
