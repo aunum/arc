@@ -152,11 +152,11 @@ class Kind(ABC):
         pass
 
     @abstractmethod
-    def copy(self) -> PID:
-        """Copy the process
+    def copy(self) -> K:
+        """Copy the kind
 
         Returns:
-            PID: A process ID
+            Kind: A kind
         """
         pass
 
@@ -197,6 +197,19 @@ class Kind(ABC):
     @abstractmethod
     def delete(self) -> None:
         """Delete the resource"""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def from_uri(cls: Type[K], uri: str) -> K:
+        """Create an instance of the class from the uri
+
+        Args:
+            uri (str): URI of the object
+
+        Returns:
+            K: A Kind
+        """
         pass
 
     @classmethod

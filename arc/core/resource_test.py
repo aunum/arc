@@ -1,13 +1,30 @@
-from typing import Iterator
+from typing import Iterator, Union, Dict, Any, List, Optional
 import logging
 
 from arc.core.resource import Resource
+from arc.scm import SCM
+from arc.core.test.bar import Baz, Spam
 
 logging.basicConfig(level=logging.INFO)
 
 
+class Ham:
+    a: str
+    b: int
+
+    def __init__(self, a: str, b: int) -> None:
+        """A Ham resource
+
+        Args:
+            a (str): A string
+            b (int): An int
+        """
+        self.a = a
+        self.b = b
+
+
 class Foo(Resource):
-    """A Foo"""
+    """A simple Foo"""
 
     def test(self) -> None:
         """A test function"""
@@ -39,7 +56,7 @@ class Bar(Resource):
         Returns:
             str: String echoed with a hello
         """
-        return txt + " -- hello! " + "a: " + self.a + "b: " + str(self.b)
+        return txt + " -- hello! " + "a: " + self.a + " b: " + str(self.b)
 
     def add(self, x: int, y: int) -> int:
         """Add x to y
@@ -77,14 +94,21 @@ class Bar(Resource):
             yield f"{i}: {a}"
 
 
-def test_foo_object():
+def test_simple_create():
+    scm = SCM()
+
     FooClient = Foo.client(hot=True, dev_dependencies=True)
 
     # Create a remote instance
     print("creating foo")
     foo = FooClient()
 
-    print("foo info: ", foo.info())
+    info = foo.info()
+    print("foo info: ", info)
+    assert info["name"] == "Foo"
+    assert info["version"] == scm.sha()
+    assert info["env-sha"] == scm.env_sha()
+
     print("foo labels: ", foo.labels())
     print("foo health: ", foo.health())
     print("foo test: ", foo.test())
@@ -105,7 +129,7 @@ def test_foo_object():
     foo2.delete()
 
 
-def test_bar_object():
+def test_basic_ops():
     # Create a Bar client class with the given options
     print("creating bar")
     BarClient = Bar.client(hot=False, dev_dependencies=True, clean=False)
@@ -114,10 +138,10 @@ def test_bar_object():
     bar_client = BarClient("baz", 1)
 
     print("bar info: ", bar_client.info())
-    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "baz" + "b: " + str(1)
+    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "baz" + " b: " + str(1)
     assert bar_client.add(1, 3) == 4
     bar_client.set("qoz", 5)
-    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "qoz" + "b: " + str(5)
+    assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "qoz" + " b: " + str(5)
     bar_client.delete()
 
     print("creating bar2")
@@ -125,7 +149,7 @@ def test_bar_object():
 
     print("bar2 info: ", bar_client2.info())
     print("bar2 echo blue: ", bar_client2.echo("blue"))
-    assert bar_client2.echo("blue") == "blue" + " -- hello! " + "a: " + "qux" + "b: " + str(2)
+    assert bar_client2.echo("blue") == "blue" + " -- hello! " + "a: " + "qux" + " b: " + str(2)
     bar_client2.delete()
 
 
@@ -137,12 +161,286 @@ def test_stream():
             assert s == f"{i}: test"
 
 
+def test_save():
+    BarClient = Bar.client(dev_dependencies=True, clean=False)
+
+    print("creating and storing client")
+    bar = BarClient("zoop", 6)
+    bar.set("spam", 4)
+    uri = bar.store()
+    bar.delete()
+
+    print("loading saved object from uri: ", uri)
+    bar2 = Bar.from_uri(uri)
+    msg = bar2.echo("eggs")
+    print("echo msg: ", msg)
+    assert msg == "eggs" + " -- hello! " + "a: " + "spam" + " b: " + str(4)
+    bar2.delete()
+
+
+def test_lock():
+    BarClient = Bar.client(dev_dependencies=True, clean=False)
+
+    print("creating and storing client")
+    bar = BarClient("zoop", 6)
+    bar.set("spam", 4)
+    proc_uri = bar.process_uri
+    info = bar.info()
+    print("bar info: ", info)
+
+    assert info["locked"] is False
+    print("locking bar")
+    bar.lock()
+    info = bar.info()
+    print("new bar info: ", info)
+    assert info["locked"] is True
+    assert bar.set("eggs", 3) is None
+
+    print("Trying to connect to locked process: ", proc_uri)
+    BarClient2 = Bar.client(uri=proc_uri)
+    bar2 = BarClient2("ham", 6)
+    assert bar2.health() == {"health": "ok"}
+    info = bar2.info()
+    print("bar2 info: ", info)
+    assert info["locked"] is True
+
+    try:
+        bar.set("spam", 11)
+        assert False
+    except Exception:
+        assert True
+
+    bar.delete()
+    bar2.delete()
+
+
+def test_copy():
+    BarClient = Bar.client(dev_dependencies=True, clean=False)
+
+    print("creating client")
+    bar = BarClient("ham", 6)
+    bar.set("spam", 4)
+
+    bar2 = bar.copy()
+    msg = bar2.echo("eggs")
+    print("copied msg: ", msg)
+    assert msg == "eggs" + " -- hello! " + "a: " + "spam" + " b: " + str(4)
+
+    bar.delete()
+    bar2.delete()
+
+
+def test_nested():
+    scm = SCM()
+
+    BazClient = Baz.client(dev_dependencies=True, clean=False)
+    # Create a remote instance
+    print("creating baz")
+    baz = BazClient()
+
+    info = baz.info()
+    print("baz info: ", info)
+    assert info["name"] == "Baz"
+    assert info["version"] == scm.sha()
+    assert info["env-sha"] == scm.env_sha()
+
+    assert baz.ret("echoing back!", Spam("this", 2)) == "echoing back!"
+
+    baz.delete()
+
+
+class LotsOfUnions(Resource):
+    """A Resource with lots of unions"""
+
+    a: str
+    b: List[str]
+    c: bool
+
+    def __init__(self, a: Union[str, int], b: Union[Dict[str, Any], List[str]], c: Optional[bool] = None) -> None:
+        """A LotsOfUnions resource
+
+        Args:
+            a (Union[str, int]): An a
+            b (Union[Dict[str, Any], List[str]]): A b
+            c (Optional[bool], optional): A c. Defaults to None.
+        """
+        self.a = str(a)
+
+        if isinstance(b, dict):
+            b = list(b.keys())
+        self.b = b
+
+        if c is None:
+            c = False
+        self.c = c
+
+    def echo(self, txt: Optional[str] = None) -> str:
+        """Echo a string back
+
+        Args:
+            txt (str): String to echo
+
+        Returns:
+            str: String echoed with a hello
+        """
+        if txt is None:
+            txt = "klaus"
+
+        return txt + " -- hello! " + "a: " + self.a + " c: " + str(self.c)
+
+    def returns_optional(self, a: Union[str, int]) -> Optional[str]:
+        """Optionally returns the given string or returns None if int
+
+        Args:
+            a (Union[str, int]): A string or int
+
+        Returns:
+            Optional[str]: An optional string
+        """
+        if isinstance(a, int):
+            return None
+        else:
+            return a
+
+    def optional_obj(
+        self, h: Union[Ham, Dict[str, Any]], return_dict: Optional[bool] = None
+    ) -> Union[Ham, Dict[str, Any]]:
+        """Receives either a Ham or a dictionary and optionally returns a ham
+
+        Args:
+            h (Union[Ham, Dict[str, Any]]): A Ham or a dictionary of Ham
+
+        Returns:
+            Union[Ham, Dict[str, Any]]: A Ham or nothing
+        """
+        if isinstance(h, dict):
+            h = Ham(h["a"], h["b"])
+
+        if return_dict:
+            return h.__dict__
+
+        return h
+
+
+def test_union():
+    LouClient = LotsOfUnions.client(dev_dependencies=True, clean=False)
+
+    lou = LouClient(1, {"this": "that", "then": "there"}, True)
+    msg = lou.echo("spam")
+    print("msg1: ", msg)
+    assert msg == "spam" + " -- hello! " + "a: " + "1" + " c: " + "True"
+
+    msg = lou.echo()
+    print("msg2: ", msg)
+    assert msg == "klaus" + " -- hello! " + "a: " + "1" + " c: " + "True"
+
+    assert lou.returns_optional("eggs") == "eggs"
+    assert lou.returns_optional(1) is None
+
+    assert lou.optional_obj(Ham("foo", 4)) == Ham("foo", 4)
+    assert lou.optional_obj(Ham("bar", 5), True) == {"a": "bar", "b": 5}
+    assert lou.optional_obj({"a": "baz", "b": 6}) == Ham("baz", 6)
+
+    lou.delete()
+
+
+def test_tuple():
+    pass
+
+
+def test_dataclass():
+    pass
+
+
+def test_enum():
+    pass
+
+
+def test_find():
+    pass
+
+
+def test_logs():
+    pass
+
+
+def test_resources():
+    pass
+
+
+def test_notebook():
+    pass
+
+
+def test_numpy():
+    pass
+
+
+def test_pandas():
+    pass
+
+
+def test_arrow():
+    pass
+
+
+def test_tf():
+    pass
+
+
+def test_torch():
+    pass
+
+
+def test_source():
+    pass
+
+
+def test_diff():
+    pass
+
+
+def test_merge():
+    pass
+
+
+def test_sync():
+    pass
+
+
+def test_schema():
+    pass
+
+
+def test_generic():
+    pass
+
+
+def test_ui():
+    pass
+
+
 if __name__ == "__main__":
-    print("testing foo")
-    test_foo_object()
+    # print("\n=====\ntesting simple create\n")
+    # test_simple_create()
 
-    print("testing bar")
-    test_bar_object()
+    # print("\n=====\ntesting basic ops\n")
+    # test_basic_ops()
 
-    print("testing stream")
-    test_stream()
+    # print("\n=====\ntesting stream\n")
+    # test_stream()
+
+    # print("\n=====\ntesting save\n")
+    # test_save()
+
+    # print("\n=====\ntesting lock\n")
+    # test_lock()
+
+    # print("\n=====\ntesting copy\n")
+    # test_copy()
+
+    # print("\n=====\ntesting nested\n")
+    # test_nested()
+
+    print("\n=====\ntesting union\n")
+    test_union()

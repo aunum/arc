@@ -4,51 +4,34 @@ import logging
 import urllib
 from typing import Type
 
-from arc.core.resource import Client
+from arc.core.resource import Client, is_annotation_match  # noqa
 import typing
 from types import NoneType
 import socket
 from websocket import create_connection
 import arc.core.resource
+import resource_test
 import arc.kind
 import simple_parsing.helpers.serialization.serializable
 import arc.config
 
 
-class BarClient(Client):
-    def __init__(self, a: str, b: int, **kwargs) -> None:
-        """A Bar resource
+class LotsOfUnionsClient(Client):
+    def __init__(
+        self,
+        a: typing.Union[str, int],
+        b: typing.Union[typing.Dict[str, typing.Any], typing.List[str]],
+        c: typing.Optional[bool] = None,
+        **kwargs,
+    ) -> None:
+        """A LotsOfUnions resource
 
         Args:
-            a (str): A string
-            b (int): An int
+            a (Union[str, int]): An a
+            b (Union[Dict[str, Any], List[str]]): A b
+            c (Optional[bool], optional): A c. Defaults to None.
         """
-        super().__init__(a=a, b=b, **kwargs)
-
-    def add(self, x: int, y: int) -> int:
-        """Add x to y
-
-        Args:
-            x (int): Number
-            y (int): Number
-
-        Returns:
-            int: Sum
-        """
-
-        _params = json.dumps({"x": x, "y": y}).encode("utf8")
-        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
-        _req = request.Request(
-            f"{self.server_addr}/add",
-            data=_params,
-            headers=_headers,
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
+        super().__init__(a=a, b=b, c=c, **kwargs)
 
     def diff(self, uri: str) -> str:
         """Diff of the given object from the URI
@@ -74,7 +57,7 @@ class BarClient(Client):
 
         return _ret
 
-    def echo(self, txt: str) -> str:
+    def echo(self, txt: typing.Optional[str] = None) -> str:
         """Echo a string back
 
         Args:
@@ -83,8 +66,14 @@ class BarClient(Client):
         Returns:
             str: String echoed with a hello
         """
+        if isinstance(txt, NoneType):
+            _txt = None
+        elif isinstance(txt, str):
+            _txt = txt
+        else:
+            raise ValueError("Do not know how to serialize parameter 'txt'")
 
-        _params = json.dumps({"txt": txt}).encode("utf8")
+        _params = json.dumps({"txt": _txt}).encode("utf8")
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
             f"{self.server_addr}/echo",
@@ -140,9 +129,7 @@ class BarClient(Client):
 
         return _ret
 
-    def lock(
-        self, key: typing.Optional[str] = None, timeout: typing.Optional[int] = None
-    ) -> None:
+    def lock(self, key: typing.Optional[str] = None, timeout: typing.Optional[int] = None) -> None:
         """Lock the process to only operate with the caller
 
         Args:
@@ -182,14 +169,10 @@ class BarClient(Client):
         Returns:
             Iterable[str]: A stream of logs
         """
-        _server_addr = (
-            f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{self.server_port}"
-        )
+        _server_addr = f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{self.server_port}"
 
         # you need to create your own socket here
-        _sock = socket.create_connection(
-            (f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port)
-        )
+        _sock = socket.create_connection((f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port))
 
         _encoded = urllib.parse.urlencode({"data": json.dumps({})})
         _ws = create_connection(
@@ -252,6 +235,102 @@ class BarClient(Client):
 
         return _ret
 
+    def optional_obj(
+        self,
+        h: typing.Union[resource_test.Ham, typing.Dict[str, typing.Any]],
+        return_dict: typing.Optional[bool] = None,
+    ) -> typing.Union[resource_test.Ham, typing.Dict[str, typing.Any]]:
+        """Recieves either a Ham or a dictionary and optionally returns a ham
+
+        Args:
+            h (Union[Ham, Dict[str, Any]]): A Ham or a dictionary of Ham
+
+        Returns:
+            Union[Ham, Dict[str, Any]]: A Ham or nothing
+        """
+        if isinstance(h, resource_test.Ham):
+            _h = h.__dict__
+        elif isinstance(h, typing.Dict):
+            _h = h.__dict__
+        else:
+            raise ValueError("Do not know how to serialize parameter 'h'")
+        if isinstance(return_dict, NoneType):
+            _return_dict = None
+        elif isinstance(return_dict, bool):
+            _return_dict = return_dict
+        else:
+            raise ValueError("Do not know how to serialize parameter 'return_dict'")
+
+        _params = json.dumps({"h": _h, "return_dict": _return_dict}).encode("utf8")
+        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
+        _req = request.Request(
+            f"{self.server_addr}/optional_obj",
+            data=_params,
+            headers=_headers,
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _deserialized: bool = False
+        if not _deserialized:
+            try:
+                _ret = object.__new__(typing.Union)
+                for k, v in _jdict.items():
+                    setattr(_ret, k, v)
+            except:  # noqa
+                pass
+        if not _deserialized:
+            try:
+                _ret = _jdict
+            except:  # noqa
+                pass
+        if not _deserialized:
+            raise ValueError("unable to deserialize returned value")
+
+        return _ret
+
+    def returns_optional(self, a: typing.Union[str, int]) -> typing.Optional[str]:
+        """Optionally returns the given string or returns None if int
+
+        Args:
+            a (Union[str, int]): A string or int
+
+        Returns:
+            Optional[str]: An optional string
+        """
+        if isinstance(a, str):
+            _a = a
+        elif isinstance(a, int):
+            _a = a
+        else:
+            raise ValueError("Do not know how to serialize parameter 'a'")
+
+        _params = json.dumps({"a": _a}).encode("utf8")
+        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
+        _req = request.Request(
+            f"{self.server_addr}/returns_optional",
+            data=_params,
+            headers=_headers,
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _deserialized: bool = False
+        if not _deserialized:
+            try:
+                _ret = _jdict["response"]
+            except:  # noqa
+                pass
+        if not _deserialized:
+            try:
+                _ret = _jdict["response"]
+            except:  # noqa
+                pass
+        if not _deserialized:
+            raise ValueError("unable to deserialize returned value")
+
+        return _ret
+
     def save(self, out_dir: str = "./artifacts") -> None:
         """Save the object
 
@@ -263,28 +342,6 @@ class BarClient(Client):
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
             f"{self.server_addr}/save",
-            data=_params,
-            headers=_headers,
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
-
-    def set(self, a: str, b: int) -> None:
-        """Set the params
-
-        Args:
-            a (str): A string
-            b (int): An int
-        """
-
-        _params = json.dumps({"a": a, "b": b}).encode("utf8")
-        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
-        _req = request.Request(
-            f"{self.server_addr}/set",
             data=_params,
             headers=_headers,
         )
@@ -311,45 +368,6 @@ class BarClient(Client):
         _ret = _jdict["response"]
 
         return _ret
-
-    def stream(self, a: str, num: int) -> typing.Iterator[str]:
-        """Stream back the string for the given number of times
-
-        Args:
-            a (str): String to stream
-            num (int): Number of times to return
-
-        Yields:
-            Iterator[str]: An iterator
-        """
-        _server_addr = (
-            f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{self.server_port}"
-        )
-
-        # you need to create your own socket here
-        _sock = socket.create_connection(
-            (f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port)
-        )
-
-        _encoded = urllib.parse.urlencode({"data": json.dumps({"a": a, "num": num})})
-        _ws = create_connection(
-            f"ws://{_server_addr}/stream?{_encoded}",
-            header=[f"client-uuid: {str(self.uid)}"],
-            socket=_sock,
-        )
-        try:
-            while True:
-                code, _data = _ws.recv_data()
-                if code == 8:
-                    break
-                _jdict = json.loads(_data)
-                _ret = _jdict["response"]
-
-                yield _ret
-
-        except Exception as e:
-            print("stream exception: ", e)
-            raise e
 
     def sync(self) -> None:
         """Sync changes to a remote process"""
@@ -488,10 +506,7 @@ class BarClient(Client):
         return _ret
 
     def from_opts(
-        self,
-        opts: typing.Type[
-            simple_parsing.helpers.serialization.serializable.Serializable
-        ],
+        self, opts: typing.Type[simple_parsing.helpers.serialization.serializable.Serializable]
     ) -> arc.core.resource.Resource:
         """Load server from Opts
 
@@ -647,10 +662,7 @@ class BarClient(Client):
         return _ret
 
     def store_cls(
-        self,
-        clean: bool = True,
-        dev_dependencies: bool = False,
-        sync_strategy: arc.config.RemoteSyncStrategy = "image",
+        self, clean: bool = True, dev_dependencies: bool = False, sync_strategy: arc.config.RemoteSyncStrategy = "image"
     ) -> str:
         """Create an image from the server class that can be used to create servers from scratch
 
@@ -664,11 +676,7 @@ class BarClient(Client):
         """
 
         _params = json.dumps(
-            {
-                "clean": clean,
-                "dev_dependencies": dev_dependencies,
-                "sync_strategy": sync_strategy,
-            }
+            {"clean": clean, "dev_dependencies": dev_dependencies, "sync_strategy": sync_strategy}
         ).encode("utf8")
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
@@ -684,9 +692,7 @@ class BarClient(Client):
         return _ret
 
     def versions(
-        self,
-        repositories: typing.Optional[typing.List[str]] = None,
-        cfg: typing.Optional[arc.config.Config] = None,
+        self, repositories: typing.Optional[typing.List[str]] = None, cfg: typing.Optional[arc.config.Config] = None
     ) -> typing.List[str]:
         """Find all versions of this type
 
@@ -711,9 +717,7 @@ class BarClient(Client):
         else:
             raise ValueError("Do not know how to serialize parameter 'cfg'")
 
-        _params = json.dumps({"repositories": _repositories, "cfg": _cfg}).encode(
-            "utf8"
-        )
+        _params = json.dumps({"repositories": _repositories, "cfg": _cfg}).encode("utf8")
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
             f"{self.server_addr}/versions",
@@ -731,7 +735,7 @@ class BarClient(Client):
         super().__init__(uri)
 
     @classmethod
-    def from_uri(cls: Type["BarClient"], uri: str) -> "BarClient":
+    def from_uri(cls: Type["LotsOfUnionsClient"], uri: str) -> "LotsOfUnionsClient":
         c = cls.__new__(cls)
         c._super_init(uri)
         return c

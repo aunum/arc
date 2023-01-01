@@ -9,7 +9,7 @@ from docker import APIClient
 
 # import enlighten
 
-from arc.image.file import ContainerFile, write_containerfile, ARC_DOCKERFILE_NAME, delete_containerfile
+from arc.image.file import ContainerFile, write_containerfile, ARC_DOCKERFILE_NAME
 from arc.image.id import ImageID
 from arc.config import Config, RemoteSyncStrategy
 from arc.image.client import default_socket
@@ -197,7 +197,7 @@ def _add_repo_files(
         else:
             container_file.copy(files, os.path.join(f"{REPO_ROOT}/"))
 
-    container_file.copy(".git", f"{REPO_ROOT}/.git")
+    container_file.copy(".git", f"{REPO_ROOT}/.git/")
 
     return container_file
 
@@ -273,6 +273,7 @@ def build_poetry_base_containerfile(
     # NOTE: there is likely a better way of doing this; copying the .git directory
     # with the tar sync was causing errors, and it is needed for the algorithms to
     # work currently
+
     container_file.copy(".git", f"{REPO_ROOT}/.git/")
 
     container_file.expose(DEFAULT_PORT)

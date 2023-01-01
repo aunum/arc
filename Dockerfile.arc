@@ -13,7 +13,8 @@ COPY ./poetry.lock ./pyproject.toml /app/
 RUN poetry install --no-ansi --no-root
 COPY .git /app/.git/
 EXPOSE 8000
-COPY ["arc/core/bar_client.py", "arc/core/bar_server.py", "arc/core/client_builder.py", "arc/core/client_builder_test.py", "arc/core/foo.ipynb", "arc/core/foo_client.py", "arc/core/foo_server.py", "arc/core/resource.py", "arc/core/resource_test.py", "/app/arc/core/"]
+COPY ["arc/core/lotsofunions_client.py", "arc/core/lotsofunions_server.py", "arc/core/bar_client.py", "arc/core/bar_server.py", "arc/core/client_builder.py", "arc/core/client_builder_test.py", "arc/core/foo.ipynb", "arc/core/foo_client.py", "arc/core/foo_server.py", "arc/core/resource.py", "arc/core/resource_test.py", "/app/arc/core/"]
+COPY ["arc/core/test/bar.py", "arc/core/test/baz_client.py", "arc/core/test/baz_server.py", "/app/arc/core/test/"]
 COPY [".gitignore", ".pylintrc", ".python-version", "Dockerfile", "Dockerfile.arc", "LICENSE", "Makefile", "README.md", "poetry.lock", "pyproject.toml", "/app/"]
 COPY ["arc/client.py", "arc/config.py", "arc/generic.py", "arc/kind.py", "arc/opts.py", "arc/project.py", "arc/project_test.py", "arc/scm.py", "arc/scm_test.py", "/app/arc/"]
 COPY ["arc/cmd/root.py", "arc/cmd/run.py", "/app/arc/cmd/"]
@@ -32,5 +33,5 @@ COPY ["examples/mnist/job/.python-version", "examples/mnist/job/README.md", "exa
 COPY ["examples/mnist/models/keras/.python-version", "examples/mnist/models/keras/README.md", "examples/mnist/models/keras/arc.yaml", "examples/mnist/models/keras/classifier.py", "examples/mnist/models/keras/convimgclassifier_server.py", "examples/mnist/models/keras/requirements.txt", "examples/mnist/models/keras/test.ipynb", "examples/mnist/models/keras/test.py", "/app/examples/mnist/models/keras/"]
 COPY ["examples/mnist/models/torch/.env", "examples/mnist/models/torch/.python-version", "examples/mnist/models/torch/README.md", "examples/mnist/models/torch/classifier.py", "examples/mnist/models/torch/environment.yml", "/app/examples/mnist/models/torch/"]
 COPY ["static/logo.png", "/app/static/"]
-COPY .git /app/.git
-CMD ["poetry", "run", "python", "/app/arc/core/bar_server.py"]
+COPY .git /app/.git/
+CMD ["poetry", "run", "python", "/app/arc/core/lotsofunions_server.py"]

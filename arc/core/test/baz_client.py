@@ -4,52 +4,19 @@ import logging
 import urllib
 from typing import Type
 
-from arc.core.resource import Client
+from arc.core.resource import Client, is_annotation_match  # noqa
 import typing
 from types import NoneType
 import socket
 from websocket import create_connection
 import arc.core.resource
+import arc.core.test.bar
 import arc.kind
 import simple_parsing.helpers.serialization.serializable
 import arc.config
 
 
-class BarClient(Client):
-    def __init__(self, a: str, b: int, **kwargs) -> None:
-        """A Bar resource
-
-        Args:
-            a (str): A string
-            b (int): An int
-        """
-        super().__init__(a=a, b=b, **kwargs)
-
-    def add(self, x: int, y: int) -> int:
-        """Add x to y
-
-        Args:
-            x (int): Number
-            y (int): Number
-
-        Returns:
-            int: Sum
-        """
-
-        _params = json.dumps({"x": x, "y": y}).encode("utf8")
-        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
-        _req = request.Request(
-            f"{self.server_addr}/add",
-            data=_params,
-            headers=_headers,
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
-
+class BazClient(Client):
     def diff(self, uri: str) -> str:
         """Diff of the given object from the URI
 
@@ -64,30 +31,6 @@ class BarClient(Client):
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
             f"{self.server_addr}/diff",
-            data=_params,
-            headers=_headers,
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
-
-    def echo(self, txt: str) -> str:
-        """Echo a string back
-
-        Args:
-            txt (str): String to echo
-
-        Returns:
-            str: String echoed with a hello
-        """
-
-        _params = json.dumps({"txt": txt}).encode("utf8")
-        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
-        _req = request.Request(
-            f"{self.server_addr}/echo",
             data=_params,
             headers=_headers,
         )
@@ -252,6 +195,23 @@ class BarClient(Client):
 
         return _ret
 
+    def ret(self, a: str, b: arc.core.test.bar.Spam) -> str:
+        """A test function"""
+
+        _params = json.dumps({"a": a, "b": b.__dict__}).encode("utf8")
+        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
+        _req = request.Request(
+            f"{self.server_addr}/ret",
+            data=_params,
+            headers=_headers,
+        )
+        _resp = request.urlopen(_req)
+        _data = _resp.read().decode("utf-8")
+        _jdict = json.loads(_data)
+        _ret = _jdict["response"]
+
+        return _ret
+
     def save(self, out_dir: str = "./artifacts") -> None:
         """Save the object
 
@@ -263,28 +223,6 @@ class BarClient(Client):
         _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
         _req = request.Request(
             f"{self.server_addr}/save",
-            data=_params,
-            headers=_headers,
-        )
-        _resp = request.urlopen(_req)
-        _data = _resp.read().decode("utf-8")
-        _jdict = json.loads(_data)
-        _ret = _jdict["response"]
-
-        return _ret
-
-    def set(self, a: str, b: int) -> None:
-        """Set the params
-
-        Args:
-            a (str): A string
-            b (int): An int
-        """
-
-        _params = json.dumps({"a": a, "b": b}).encode("utf8")
-        _headers = {"content-type": "application/json", "client-uuid": str(self.uid)}
-        _req = request.Request(
-            f"{self.server_addr}/set",
             data=_params,
             headers=_headers,
         )
@@ -311,45 +249,6 @@ class BarClient(Client):
         _ret = _jdict["response"]
 
         return _ret
-
-    def stream(self, a: str, num: int) -> typing.Iterator[str]:
-        """Stream back the string for the given number of times
-
-        Args:
-            a (str): String to stream
-            num (int): Number of times to return
-
-        Yields:
-            Iterator[str]: An iterator
-        """
-        _server_addr = (
-            f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes:{self.server_port}"
-        )
-
-        # you need to create your own socket here
-        _sock = socket.create_connection(
-            (f"{self.pod_name}.pod.{self.pod_namespace}.kubernetes", self.server_port)
-        )
-
-        _encoded = urllib.parse.urlencode({"data": json.dumps({"a": a, "num": num})})
-        _ws = create_connection(
-            f"ws://{_server_addr}/stream?{_encoded}",
-            header=[f"client-uuid: {str(self.uid)}"],
-            socket=_sock,
-        )
-        try:
-            while True:
-                code, _data = _ws.recv_data()
-                if code == 8:
-                    break
-                _jdict = json.loads(_data)
-                _ret = _jdict["response"]
-
-                yield _ret
-
-        except Exception as e:
-            print("stream exception: ", e)
-            raise e
 
     def sync(self) -> None:
         """Sync changes to a remote process"""
@@ -731,7 +630,7 @@ class BarClient(Client):
         super().__init__(uri)
 
     @classmethod
-    def from_uri(cls: Type["BarClient"], uri: str) -> "BarClient":
+    def from_uri(cls: Type["BazClient"], uri: str) -> "BazClient":
         c = cls.__new__(cls)
         c._super_init(uri)
         return c

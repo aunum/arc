@@ -3,11 +3,12 @@ import collections
 from dataclasses import dataclass
 import enum
 import shutil
+import copy
 from types import NoneType
 import types
-from urllib import request
 import json
 import socket
+import sys
 from abc import ABCMeta
 from simple_parsing import ArgumentParser
 from typing import Dict, Iterable, List, Any, Optional, Type, TypeVar, Union, get_args, get_origin, get_type_hints
@@ -24,6 +25,7 @@ from functools import wraps, partialmethod
 from types import FunctionType
 from inspect import Parameter, signature
 import importlib
+import importlib.util
 import collections.abc
 
 from starlette.applications import Starlette
@@ -66,7 +68,7 @@ from black import format_str, FileMode
 
 from arc.kube.sync import copy_file_to_pod
 from arc.image.client import default_socket
-from arc.image.build import REPO_ROOT, find_or_build_img, img_command
+from arc.image.build import REPO_ROOT, find_or_build_img, img_command, build_containerfile
 from arc.kube.pod_util import (
     REPO_SHA_LABEL,
     SYNC_SHA_LABEL,
@@ -75,6 +77,7 @@ from arc.kube.pod_util import (
     SYNC_STRATEGY_LABEL,
     wait_for_pod_ready,
 )
+from arc.image.file import write_containerfile
 from arc.config import Config, RemoteSyncStrategy
 from arc.scm import SCM
 from arc.image.registry import get_img_labels, get_repo_tags
@@ -84,7 +87,7 @@ from arc.image.build import img_id
 from arc.client import get_client_id
 from arc.kube.uri import make_py_uri, parse_k8s_uri, make_k8s_uri
 from arc.opts import OptsBuilder
-from arc.kind import Kind, PID, ObjectLocator, OBJECT_URI_ENV
+from arc.kind import Kind, ObjectLocator, OBJECT_URI_ENV
 
 
 SERVER_PORT = "8080"
@@ -108,6 +111,9 @@ class APIUtil(JsonSchemaMixin):
 
     def to_yaml(self, omit_none: bool = True, validate: bool = False, **yaml_kwargs) -> str:
         return yaml.dump(self.to_dict(omit_none, validate), **yaml_kwargs)
+
+
+C = TypeVar("C", bound="Client")
 
 
 class Client(Kind):
@@ -287,8 +293,6 @@ class Client(Kind):
         socket_create_connection = socket.create_connection
 
         def kubernetes_create_connection(address, *args, **kwargs):
-            print("patching address: ", address)
-            print("uri: ", self.uri)
             dns_name = address[0]
             if isinstance(dns_name, bytes):
                 dns_name = dns_name.decode()
@@ -345,8 +349,8 @@ class Client(Kind):
                     if server_owner != get_client_id():
                         logging.warning("found server running in cluster but owner is not current user")
                     found_pod = pod
-            status: V1PodStatus = pod.status
-            print("\n!!! pod status: ", status)
+            # status: V1PodStatus = pod.status
+            # TODO: better status
         return found_pod
 
     def _sync_to_pod(
@@ -570,13 +574,15 @@ class Client(Kind):
         """
         pass
 
-    def copy(self) -> PID:
+    def copy(self) -> R:
         """Copy the process
 
         Returns:
-            PID: A process ID
+            Client: A client
         """
-        raise NotImplementedError()
+        # TODO: add a hot copy
+        uri = self.store()
+        return self.__class__.from_uri(uri=uri)
 
     @classmethod
     def schema(cls) -> str:
@@ -608,6 +614,18 @@ class Client(Kind):
         # TODO: maybe it should delte itself https://stackoverflow.com/questions/293431/python-object-deleting-itself
         # or we could just add a 'deleted' attribute and alert if a method is called
         self.core_v1_api.delete_namespaced_pod(self.pod_name, self.pod_namespace)
+
+    @classmethod
+    def from_uri(cls: Type[R], uri: str) -> R:
+        """Create an instance of the class from the uri
+
+        Args:
+            uri (str): URI of the object
+
+        Returns:
+            R: A Resource
+        """
+        return cls(uri=uri)
 
     @classmethod
     def client(
@@ -651,21 +669,25 @@ class Client(Kind):
 
         logging.info("saving server...")
 
-        req = request.Request(f"{self.server_addr}/save", method="POST")
-        resp = request.urlopen(req)
-        body = resp.read().decode("utf-8")
+        self.save()
+        # req = request.Request(f"{self.server_addr}/save", method="POST")
+        # resp = request.urlopen(req)
+        # body = resp.read().decode("utf-8")
 
         _, tag = parse_repository_tag(self.uri)
         # registry, repo_name = resolve_repository_name(repository)
         # docker_secret = get_dockercfg_secret_name()
 
-        cls_name = tag.split("-")[1]
+        cls_name = tag.split("-")[0]
 
         info = self.info()
         version = info["version"]
         uri = img_id(RemoteSyncStrategy.IMAGE, tag=f"{cls_name}-{version}")
 
+        server_filepath = info["server-entrypoint"]
+
         labels = self.labels()
+        labels[SERVER_PATH_LABEL] = server_filepath
 
         path_params = {"name": self.pod_name, "namespace": self.pod_namespace}
 
@@ -688,7 +710,7 @@ class Client(Kind):
             label_args.append(f"--label={k}={v}")
 
         args = [
-            f"--context={REPO_ROOT}",
+            f"--context={BUILD_MNT_DIR}",
             f"--destination={uri}",
             "--dockerfile=Dockerfile.arc",
             "--ignore-path=/product_uuid",  # https://github.com/GoogleContainerTools/kaniko/issues/2164
@@ -703,7 +725,7 @@ class Client(Kind):
                         "image": "gcr.io/kaniko-project/executor:latest",
                         "volumeMounts": [
                             {"mountPath": "/kaniko/.docker/", "name": "dockercfg"},
-                            {"mountPath": REPO_ROOT, "name": "build"},
+                            {"mountPath": BUILD_MNT_DIR, "name": "build"},
                         ],
                     }
                 ]
@@ -759,23 +781,25 @@ class Client(Kind):
 
             time.sleep(1)
 
+        logging.info(f"saved object as uri: {str(uri)}")
         return str(uri)
-
-    def _is_annotation_match(annotations: Dict[str, Type], d: Dict[str, Any]) -> bool:
-        for name, t in annotations.items():
-            if name not in d:
-                return False
-
-            if not isinstance(d[name], t):
-                return False
-
-        return True
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
         self.delete()
+
+
+def is_annotation_match(annotations: Dict[str, Type], d: Dict[str, Any]) -> bool:
+    for name, t in annotations.items():
+        if name not in d:
+            return False
+
+        if not isinstance(d[name], t):
+            return False
+
+    return True
 
 
 def init_wrapper(method):
@@ -1059,11 +1083,17 @@ class Resource(Kind, APIUtil):
         Returns:
             Dict[str, Any]: Resource info
         """
+        server_filepath = self._server_filepath()
+        if is_k8s_proc():
+            server_filepath = self._container_server_path(server_filepath)
+
         return {
             "name": self.name(),
             "version": self.scm.sha(),
             "env-sha": self.scm.env_sha(),
             "uri": self.uri,
+            "server-entrypoint": server_filepath,
+            "locked": self._is_locked(),
         }
 
     @methods(["GET", "POST"])
@@ -1218,13 +1248,14 @@ class Resource(Kind, APIUtil):
         raise NotImplementedError("this method only works on client objects")
 
     @local
-    def copy(self) -> PID:
+    def copy(self) -> R:
         """Copy the process
 
         Returns:
-            PID: A process ID
+            Resource: A resource
         """
-        raise NotImplementedError()
+        # TODO: add remote copy
+        return copy.deepcopy(self)
 
     def source(self) -> str:
         """Source code for the object"""
@@ -1240,6 +1271,15 @@ class Resource(Kind, APIUtil):
         raise NotImplementedError()
 
     @classmethod
+    def _cls_package(cls) -> str:
+        """Get package of the current class
+
+        Returns:
+            str: the package
+        """
+        pass
+
+    @classmethod
     def _client_cls(cls) -> Type[Client]:
         """Class of the client for the resource
 
@@ -1251,7 +1291,29 @@ class Resource(Kind, APIUtil):
 
         cls._write_server_file()
 
-        mod = importlib.import_module(f".{cls._client_file_name()}", package=__package__)  # noqa: F841
+        modl = cls.__module__
+        msplit = modl.split(".")
+        if len(msplit) > 1:
+            msplit = msplit[:-1]
+        cls_package = ".".join(msplit)
+
+        if cls_package == "__main__":
+            spec = importlib.util.spec_from_file_location("module.name", cls._client_filepath())
+            if spec is None:
+                raise ValueError(
+                    "Trouble loading client class, if you hit this please open an issue", cls._client_filepath()
+                )
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["module.name"] = mod
+            if spec.loader is None:
+                raise ValueError(
+                    "Trouble loading client class, loader is None, if you hit this please open an issue",
+                    cls._client_filepath(),  # noqa
+                )
+            spec.loader.exec_module(mod)
+
+        else:
+            mod = importlib.import_module(f".{cls._client_file_name()}", package=cls_package)  # noqa: F841
 
         # exec(f"from .{cls._client_file_name()} import {cls.__name__}Client")
         loc_copy = locals().copy()
@@ -1327,9 +1389,18 @@ if __name__ == "__main__":
         Args:
             out_dir (str, optional): Directory to output the artiacts. Defaults to "./artifacts".
         """
+        os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, f"{self.short_name()}.pkl")
         with open(out_path, "wb") as f:
             pickle.dump(self, f)
+
+        if is_k8s_proc():
+            logging.info("building containerfile")
+            c = build_containerfile(sync_strategy=RemoteSyncStrategy.IMAGE)
+            logging.info("writing containerfile")
+            write_containerfile(c)
+            logging.info("copying directory to build dir...")
+            shutil.copytree(REPO_ROOT, BUILD_MNT_DIR, dirs_exist_ok=True)
         return
 
     @classmethod
@@ -1398,12 +1469,26 @@ if __name__ == "__main__":
         raise NotImplementedError()
 
     @classmethod
+    @local
+    def from_uri(cls: Type[R], uri: str) -> R:
+        """Create an instance of the class from the uri
+
+        Args:
+            uri (str): URI of the object
+
+        Returns:
+            R: A Resource
+        """
+        return cls._client_cls().from_uri(uri)
+
+    @classmethod
     def client(
         cls: Type[R],
         clean: bool = True,
         dev_dependencies: bool = False,
         reuse: bool = True,
         hot: bool = False,
+        uri: Optional[str] = None,
     ) -> Type[R]:
         """Create a client of the class, which will allow for the generation of instances remotely
 
@@ -1412,6 +1497,7 @@ if __name__ == "__main__":
             dev_dependencies (bool, optional): Whether to install dev dependencies. Defaults to False.
             reuse (bool, optional): Whether to reuse existing processes. Defaults to True.
             hot (bool, optional): Hot reload code remotely
+            uri (bool, optional): URI of resource to use. If None will use the current class
 
         Returns:
             Client: A client which can generate servers on object initialization
@@ -1421,15 +1507,26 @@ if __name__ == "__main__":
         #     clean=clean, dev_dependencies=dev_dependencies, sync_strategy=convert_hot_to_strategy(hot)
         # )
 
-        client_cls = partialcls(
-            cls._client_cls(),
-            server=cls,
-            reuse=reuse,
-            clean=clean,
-            dev_dependencies=dev_dependencies,
-            hot=hot,
-            scm=cls.scm,
-        )
+        if uri is None:
+            client_cls = partialcls(
+                cls._client_cls(),
+                server=cls,
+                reuse=reuse,
+                clean=clean,
+                dev_dependencies=dev_dependencies,
+                hot=hot,
+                scm=cls.scm,
+            )
+        else:
+            client_cls = partialcls(
+                cls._client_cls(),
+                uri=uri,
+                reuse=reuse,
+                clean=clean,
+                dev_dependencies=dev_dependencies,
+                hot=hot,
+                scm=cls.scm,
+            )
         return client_cls
 
     @local
@@ -1453,6 +1550,7 @@ if __name__ == "__main__":
 
         return cls._build_image(clean=clean, dev_dependencies=dev_dependencies, sync_strategy=sync_strategy)
 
+    @local
     def store(self, dev_dependencies: bool = False, clean: bool = True) -> str:
         """Create a server image with the saved artifact
 
@@ -1477,6 +1575,14 @@ if __name__ == "__main__":
         return uri
 
     @classmethod
+    def _container_server_path(cls, local_path: str) -> str:
+        server_filepath = Path(local_path)
+        repo_root = Path(str(cls.scm.git_repo.working_dir))
+        root_relative = server_filepath.relative_to(repo_root)
+        container_path = Path(REPO_ROOT).joinpath(root_relative)
+        return str(container_path)
+
+    @classmethod
     def _build_image(
         cls,
         labels: Optional[Dict[str, str]] = None,
@@ -1497,10 +1603,8 @@ if __name__ == "__main__":
         """
 
         # write the server file somewhere we can find it
-        server_filepath = Path(cls._write_server_file())
-        repo_root = Path(str(cls.scm.git_repo.working_dir))
-        root_relative = server_filepath.relative_to(repo_root)
-        container_path = Path(REPO_ROOT).joinpath(root_relative)
+        server_filepath = cls._write_server_file()
+        container_path = cls._container_server_path(server_filepath)
 
         base_labels = cls.labels()
         if labels is not None:
@@ -1569,6 +1673,15 @@ if __name__ == "__main__":
             pkgs[dir] = ""
 
         return pkgs
+
+    def _is_locked(self) -> bool:
+        if self._lock is None:
+            return False
+
+        if self._lock.is_expired():
+            return False
+
+        return True
 
     def _check_lock(self, headers: Dict[str, Any]) -> str:
         """Check if the servers locked
@@ -1736,15 +1849,13 @@ if __name__ == "__main__":
                             continue
 
                         elif arg == NoneType:
-                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) is {h}:", idt))
+                            load_lines.append(indent(f"{if_line} _jdict['{key}'] is {h}:", idt))
                             load_lines.append(indent("    pass", idt))
                             continue
 
                         elif hasattr(arg, "__annotations__"):
                             load_lines.append(
-                                indent(
-                                    f"{if_line} self._is_annotation_match({h}.__annotations__, _jdict['{key}']):", idt
-                                )
+                                indent(f"{if_line} is_annotation_match({h}.__annotations__, _jdict['{key}']):", idt)
                             )
                             proc_load(arg, key, load_lines, idt + "    ", default, optional_dict=optional_dict)
 
@@ -1761,7 +1872,12 @@ if __name__ == "__main__":
                             raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
 
                     load_lines.append(indent("else:", idt))
-                    load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {key}')", idt))
+                    load_lines.append(
+                        indent(
+                            f"    raise ValueError(f\"Argument could not be deserialized: {key} - type: {{type(_jdict['key'])}}\")",
+                            idt,
+                        )
+                    )
                     load_lines.append("")
 
                     return
@@ -1829,33 +1945,36 @@ if __name__ == "__main__":
                             raise TypeNotSupportedError()
 
                         if arg in [int, list, str, float, bool, bytes]:
-                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
-                            load_lines.append(indent("    _ret = {'response': _ret}", idt))
+                            ret_lines.append(indent(f"{if_line} isinstance(_ret, {h}):", idt))
+                            ret_lines.append(indent("    _ret = {'response': _ret}", idt))
                             continue
 
                         elif arg == NoneType:
-                            load_lines.append(indent(f"{if_line} _ret is {h}:", idt))
-                            load_lines.append(indent("    _ret = {'response': None}", idt))
+                            ret_lines.append(indent(f"{if_line} _ret is {h}:", idt))
+                            ret_lines.append(indent("    _ret = {'response': None}", idt))
                             continue
 
                         elif hasattr(arg, "__annotations__"):
-                            load_lines.append(
-                                indent(f"{if_line} self._is_annotation_match({h}.__annotations__, _ret):", idt)
-                            )
+                            ret_lines.append(indent(f"{if_line} is_annotation_match({h}.__annotations__, _ret):", idt))
                             proc_return(arg, ret_lines, idt + "    ")
 
                         # TODO: need to handle dict and list args
                         elif hasattr(arg, "__origin__") and arg.__origin__ in [list, dict]:
-                            load_lines.append(indent(f"{if_line} _ret == {h}:", idt))
-                            load_lines.append(indent("    pass", idt))
+                            ret_lines.append(indent(f"{if_line} isinstance(_ret, {h}):", idt))
+                            ret_lines.append(indent("    pass", idt))
                             continue
 
                         else:
                             raise ValueError("arg is not currently supported: ", arg, arg.__dict__)
 
-                    load_lines.append(indent("else:", idt))
-                    load_lines.append(indent(f"    raise ValueError('Argument could not be deserialized: {ret}')", idt))
-                    load_lines.append("")
+                    ret_lines.append(indent("else:", idt))
+                    ret_lines.append(
+                        indent(
+                            f"    raise ValueError(f'Argument could not be deserialized: {ret} -- type: {{type(_ret)}}\"')",  # noqa
+                            idt,
+                        )
+                    )
+                    ret_lines.append("")
                     return
                 else:
                     # Standard generic type
@@ -1885,6 +2004,7 @@ if __name__ == "__main__":
             # Need to handle things like mixins --> look at json schema mixin
 
         for name, fn in fns:
+            print("\n====\nfn: ", name)
             root_cls = cls._get_class_that_defined_method(fn)
             if not issubclass(root_cls, Resource):
                 # logging.info(f"skipping fn '{name}' as it is not of subclass resource")
@@ -2002,6 +2122,7 @@ if __name__ == "__main__":
                 for line in load_lines:
                     line += "\n"
                     joined_load_lines += indent(line, "        ")
+
                 req_code = f"""
     async def _{name}_req(self, request):
         \"""Request for function:
@@ -2051,7 +2172,7 @@ if __name__ == "__main__":
 
         imports_joined = "\n".join(import_statements.keys())
         server_fns_joined = "".join(server_fns)
-        client_file = f"""
+        server_file = f"""
 from typing import List
 import logging
 import os
@@ -2064,6 +2185,7 @@ from starlette.responses import JSONResponse
 from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
 import uvicorn
+from arc.core.resource import is_annotation_match  # noqa
 
 from {cls_file} import *
 from {cls_file} import {cls.__name__}
@@ -2100,28 +2222,39 @@ if __name__ == "__main__":
         reload_dirs=pkgs.keys(),
     )
         """
-        return client_file
+        return server_file
 
     @classmethod
     def _server_file_name(cls) -> str:
-        return f"{cls.__name__.lower()}_server"
+        return f"{cls.short_name()}_server"
+
+    @classmethod
+    def _server_filepath(cls) -> str:
+        filename = f"{cls._server_file_name()}.py"
+        dir = os.path.dirname(os.path.abspath(inspect.getfile(cls)))
+        filepath = os.path.join(dir, filename)
+        return filepath
 
     @classmethod
     def _write_server_file(cls) -> str:
         """Generate and write the server file next to the current one"""
-        filename = f"{cls._server_file_name()}.py"
-        dir = os.path.dirname(os.path.abspath(__file__))
-        filepath = os.path.join(dir, filename)
+        filepath = cls._server_filepath()
         logging.info(f"writing server file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             server_code = cls._gen_server()
-            server_code = format_str(server_code, mode=FileMode())
+            # server_code = format_str(server_code, mode=FileMode())
             f.write(server_code)
         return filepath
 
     @classmethod
     def _build_hint(cls, h: Type, imports: Dict[str, Any], module: Optional[str] = None) -> str:
+        print("----")
+        print("building hint for type: ", h)
+        print("module: ", module)
+
         if hasattr(h, "__forward_arg__"):
+            if module == "__main__":
+                return h.__forward_arg__
             fq = f"{module}.{h.__forward_arg__}"
             imports[f"import {module}"] = None
             return fq
@@ -2137,7 +2270,22 @@ if __name__ == "__main__":
             if h.__module__ == "builtins":
                 return f"{h.__name__}"
             else:
+                if h.__module__ == "__main__":
+                    p = inspect.getfile(cls)
+                    print("path: ", p)
+                    if hasattr(cls, "__file__"):
+                        print("__file__: ", cls.__file__)
+                    filename = os.path.basename(p)
+
+                    print("filename: ", filename)
+                    mod_name = filename.split(".")[0]
+                    # we always assume that if the __module__ is main the resource is in
+                    # the same module as the object, and if it weren't it would be a circular import
+                    imports[f"import {mod_name}"] = None
+                    return f"{mod_name}.{h.__name__}"
+
                 imports[f"import {h.__module__}"] = None
+
                 return f"{h.__module__}.{h.__name__}"
         else:
             if hasattr(h, "__module__"):
@@ -2146,6 +2294,25 @@ if __name__ == "__main__":
                 if module is None:
                     raise ValueError("mod is None!")
                 mod = module
+
+            if mod == "__main__":
+                p = inspect.getfile(cls)
+                print("path: ", p)
+                if hasattr(cls, "__file__"):
+                    print("__file__: ", cls.__file__)
+                filename = os.path.basename(p)
+
+                print("filename: ", filename)
+                mod_name = filename.split(".")[0]
+                # we always assume that if the __module__ is main the resource is in
+                # the same module as the object, and if it weren't it would be a circular import
+                imports[f"import {mod_name}"] = None
+                return f"{mod_name}.{str(h)}"
+                # f = inspect.getfile(h)
+                # client_path = cls._client_filepath()
+                # imports[f"import {cls.__module__}"] = None
+                # return f"{cls.__module__}.{str(h)}"
+
             imports[f"import {mod}"] = None
             return f"{mod}.{str(h)}"
 
@@ -2331,7 +2498,7 @@ if __name__ == "__main__":
             return
 
         for name, fn in fns:
-            print("=====\nfn name: ", name)
+            print("\n=====\nclient fn name: ", name)
             params: List[str] = []
 
             root_cls = cls._get_class_that_defined_method(fn)
@@ -2520,10 +2687,11 @@ if __name__ == "__main__":
         {doc}
 {param_ser_lines_joined}
         _params = json.dumps({{{params_joined}}}).encode("utf8")
+        _headers = {{"content-type": "application/json", "client-uuid": str(self.uid)}}
         _req = request.Request(
             f"{{self.server_addr}}/{name}",
             data=_params,
-            headers={{"content-type": "application/json", "client-uuid": str(self.uid)}}
+            headers=_headers,
         )
         _resp = request.urlopen(_req)
         _data = _resp.read().decode("utf-8")
@@ -2540,13 +2708,23 @@ from urllib import request, parse
 import json
 import logging
 import urllib
+from typing import Type
 
-from arc.core.resource import Client
+from arc.core.resource import Client, is_annotation_match # noqa
 {imports_joined}
 
 class {cls.__name__}Client(Client):
 
 {client_fns_joined}
+
+    def _super_init(self, uri: str) -> None:
+        super().__init__(uri)
+
+    @classmethod
+    def from_uri(cls: Type["{cls.__name__}Client"], uri: str) -> "{cls.__name__}Client":
+        c = cls.__new__(cls)
+        c._super_init(uri)
+        return c
         """
 
         return client_file
@@ -2556,22 +2734,25 @@ class {cls.__name__}Client(Client):
         return f"{cls.__name__.lower()}_client"
 
     @classmethod
+    def _client_filepath(cls) -> str:
+        filename = f"{cls._client_file_name()}.py"
+        dir = os.path.dirname(os.path.abspath(inspect.getfile(cls)))
+        filepath = os.path.join(dir, filename)
+        return filepath
+
+    @classmethod
     def _write_client_file(cls) -> str:
         """Generate and write the client file next to the current one"""
-        filename = f"{cls._client_file_name()}.py"
-        dir = os.path.dirname(os.path.abspath(__file__))
-        filepath = os.path.join(dir, filename)
+        filepath = cls._client_filepath()
         logging.info(f"writing client file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             client_code = cls._gen_client()
-            client_code = format_str(client_code, mode=FileMode())
+            # client_code = format_str(client_code, mode=FileMode())
             f.write(client_code)
         return filepath
 
     def __enter__(self):
-        print("entering!")
         return self
 
     def __exit__(self, *args):
-        print("exiting")
         return

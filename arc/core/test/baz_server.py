@@ -1,3 +1,4 @@
+
 from typing import List
 import logging
 import os
@@ -10,9 +11,11 @@ from starlette.responses import JSONResponse
 from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
 import uvicorn
+from arc.core.resource import is_annotation_match  # noqa
 
-from resource_test import *
-from resource_test import Bar
+from bar import *
+from bar import Baz
+import arc.core.test.bar
 import arc.kind
 import typing
 import arc.config
@@ -24,28 +27,7 @@ else:
     logging.basicConfig(level=log_level)
 
 
-class BarServer(Bar):
-    async def _add_req(self, request):
-        """Request for function:
-        add(self, x: int, y: int) -> int
-        """
-
-        body = await request.body()
-        print("len body: ", len(body))
-        print("body: ", body)
-
-        _jdict = {}
-        if len(body) != 0:
-            _jdict = json.loads(body)
-
-        headers = request.headers
-        logging.debug(f"headers: {headers}")
-        self._check_lock(headers)
-
-        _ret = self.add(**_jdict)
-        _ret = {"response": _ret}
-
-        return JSONResponse(_ret)
+class BazServer(Baz):
 
     async def _diff_req(self, request):
         """Request for function:
@@ -64,30 +46,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.diff(**_jdict)
-        _ret = {"response": _ret}
-
-        return JSONResponse(_ret)
-
-    async def _echo_req(self, request):
-        """Request for function:
-        echo(self, txt: str) -> str
-        """
-
-        body = await request.body()
-        print("len body: ", len(body))
-        print("body: ", body)
-
-        _jdict = {}
-        if len(body) != 0:
-            _jdict = json.loads(body)
-
-        headers = request.headers
-        logging.debug(f"headers: {headers}")
-        self._check_lock(headers)
-
-        _ret = self.echo(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -106,6 +67,8 @@ class BarServer(Bar):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
+        
+
 
         _ret = self.health(**_jdict)
 
@@ -126,6 +89,8 @@ class BarServer(Bar):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
+        
+
 
         _ret = self.info(**_jdict)
 
@@ -146,31 +111,29 @@ class BarServer(Bar):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
+        
 
-        if "key" in _jdict:
+        if 'key' in _jdict:
 
-            if _jdict["key"] is None:
+            if _jdict['key'] is None:
                 pass
-            elif type(_jdict["key"]) == str:
-                pass
-            else:
-                raise ValueError(
-                    f"Argument could not be deserialized: key - type: {type(_jdict['key'])}"
-                )
-
-        if "timeout" in _jdict:
-
-            if _jdict["timeout"] is None:
-                pass
-            elif type(_jdict["timeout"]) == int:
+            elif type(_jdict['key']) == str:
                 pass
             else:
-                raise ValueError(
-                    f"Argument could not be deserialized: timeout - type: {type(_jdict['key'])}"
-                )
+                raise ValueError(f"Argument could not be deserialized: key - type: {type(_jdict['key'])}")
+
+        if 'timeout' in _jdict:
+
+            if _jdict['timeout'] is None:
+                pass
+            elif type(_jdict['timeout']) == int:
+                pass
+            else:
+                raise ValueError(f"Argument could not be deserialized: timeout - type: {type(_jdict['key'])}")
+
 
         _ret = self.lock(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
 
         return JSONResponse(_ret)
 
@@ -191,9 +154,10 @@ class BarServer(Bar):
         if "data" in qs and len(qs["data"]) > 0:
             _jdict = json.loads(qs["data"][0])
 
+
         print("jdict: ", _jdict)
         for _ret in self.logs(**_jdict):
-            _ret = {"response": _ret}
+            _ret = {'response': _ret}
 
             print("seding json")
             await websocket.send_json(_ret)
@@ -201,7 +165,7 @@ class BarServer(Bar):
 
         print("all done sending data, closing socket")
         await websocket.close()
-
+                
     async def _merge_req(self, request):
         """Request for function:
         merge(self, uri: str) -> ~R
@@ -218,6 +182,7 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
+
 
         _ret = self.merge(**_jdict)
         _ret = _ret.to_dict()
@@ -241,8 +206,38 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.notebook(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
+
+        return JSONResponse(_ret)
+
+    async def _ret_req(self, request):
+        """Request for function:
+        ret(self, a: str, b: arc.core.test.bar.Spam) -> str
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+
+        _obj = object.__new__(arc.core.test.bar.Spam)
+        for _k, _v in _jdict['b'].items():
+            setattr(_obj, _k, _v)
+        _jdict['b'] = _obj
+
+
+        _ret = self.ret(**_jdict)
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -263,30 +258,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.save(**_jdict)
-        _ret = {"response": None}
-
-        return JSONResponse(_ret)
-
-    async def _set_req(self, request):
-        """Request for function:
-        set(self, a: str, b: int) -> None
-        """
-
-        body = await request.body()
-        print("len body: ", len(body))
-        print("body: ", body)
-
-        _jdict = {}
-        if len(body) != 0:
-            _jdict = json.loads(body)
-
-        headers = request.headers
-        logging.debug(f"headers: {headers}")
-        self._check_lock(headers)
-
-        _ret = self.set(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
 
         return JSONResponse(_ret)
 
@@ -307,38 +281,11 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.source(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
-
-    async def _stream_req(self, websocket):
-        """Request for function:
-        stream(self, a: str, num: int) -> Iterator[str]
-        """
-
-        await websocket.accept()
-        headers = websocket.headers
-        logging.debug(f"headers: {headers}")
-        self._check_lock(headers)
-
-        # Process incoming messages
-        qs = urllib.parse.parse_qs(str(websocket.query_params))
-
-        _jdict = {}
-        if "data" in qs and len(qs["data"]) > 0:
-            _jdict = json.loads(qs["data"][0])
-
-        print("jdict: ", _jdict)
-        for _ret in self.stream(**_jdict):
-            _ret = {"response": _ret}
-
-            print("seding json")
-            await websocket.send_json(_ret)
-            print("sent")
-
-        print("all done sending data, closing socket")
-        await websocket.close()
 
     async def _sync_req(self, request):
         """Request for function:
@@ -357,8 +304,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.sync(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
 
         return JSONResponse(_ret)
 
@@ -377,20 +325,20 @@ class BarServer(Bar):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
+        
 
-        if "key" in _jdict:
+        if 'key' in _jdict:
 
-            if _jdict["key"] is None:
+            if _jdict['key'] is None:
                 pass
-            elif type(_jdict["key"]) == str:
+            elif type(_jdict['key']) == str:
                 pass
             else:
-                raise ValueError(
-                    f"Argument could not be deserialized: key - type: {type(_jdict['key'])}"
-                )
+                raise ValueError(f"Argument could not be deserialized: key - type: {type(_jdict['key'])}")
+
 
         _ret = self.unlock(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
 
         return JSONResponse(_ret)
 
@@ -410,6 +358,7 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
+
 
         _ret = self.base_names(**_jdict)
         _ret = _ret.__dict__
@@ -433,8 +382,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.clean_artifacts(**_jdict)
-        _ret = {"response": None}
+        _ret = {'response': None}
 
         return JSONResponse(_ret)
 
@@ -455,10 +405,12 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _obj = object.__new__(arc.kind.ObjectLocator)
-        for _k, _v in _jdict["locator"].items():
+        for _k, _v in _jdict['locator'].items():
             setattr(_obj, _k, _v)
-        _jdict["locator"] = _obj
+        _jdict['locator'] = _obj
+
 
         _ret = self.find(**_jdict)
         _ret = _ret.__dict__
@@ -482,6 +434,7 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.from_env(**_jdict)
         _ret = _ret.to_dict()
 
@@ -504,6 +457,7 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.labels(**_jdict)
 
         return JSONResponse(_ret)
@@ -524,6 +478,7 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
+
 
         _ret = self.load(**_jdict)
         _ret = _ret.to_dict()
@@ -547,8 +502,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.name(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -568,6 +524,7 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
+
 
         _ret = self.opts_schema(**_jdict)
 
@@ -590,8 +547,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.schema(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -612,8 +570,9 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+
         _ret = self.short_name(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -634,13 +593,11 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-        if "sync_strategy" in _jdict:
-            _jdict["sync_strategy"] = arc.config.RemoteSyncStrategy(
-                _jdict["sync_strategy"]
-            )
+        if 'sync_strategy' in _jdict:
+            _jdict['sync_strategy'] = arc.config.RemoteSyncStrategy(_jdict['sync_strategy'])
 
         _ret = self.store_cls(**_jdict)
-        _ret = {"response": _ret}
+        _ret = {'response': _ret}
 
         return JSONResponse(_ret)
 
@@ -661,34 +618,29 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-        if "repositories" in _jdict:
+        if 'repositories' in _jdict:
 
-            if _jdict["repositories"] is None:
+            if _jdict['repositories'] is None:
                 pass
-            elif type(_jdict["repositories"]) == typing.List:
+            elif type(_jdict['repositories']) == typing.List:
                 pass
             else:
-                raise ValueError(
-                    f"Argument could not be deserialized: repositories - type: {type(_jdict['key'])}"
-                )
+                raise ValueError(f"Argument could not be deserialized: repositories - type: {type(_jdict['key'])}")
 
-        if "cfg" in _jdict:
+        if 'cfg' in _jdict:
 
-            if _jdict["cfg"] is None:
+            if _jdict['cfg'] is None:
                 pass
-            elif self._is_annotation_match(
-                arc.config.Config.__annotations__, _jdict["cfg"]
-            ):
+            elif is_annotation_match(arc.config.Config.__annotations__, _jdict['cfg']):
 
                 _obj = object.__new__(arc.config.Config)
-                for _k, _v in _jdict["cfg"].items():
+                for _k, _v in _jdict['cfg'].items():
                     setattr(_obj, _k, _v)
-                _jdict["cfg"] = _obj
+                _jdict['cfg'] = _obj
 
             else:
-                raise ValueError(
-                    f"Argument could not be deserialized: cfg - type: {type(_jdict['key'])}"
-                )
+                raise ValueError(f"Argument could not be deserialized: cfg - type: {type(_jdict['key'])}")
+
 
         _ret = self.versions(**_jdict)
         _ret = _ret.__dict__
@@ -696,46 +648,16 @@ class BarServer(Bar):
         return JSONResponse(_ret)
 
     def _routes(self) -> List[BaseRoute]:
-        return [
-            Route("/add", endpoint=self._add_req, methods=["POST"]),
-            Route("/diff", endpoint=self._diff_req, methods=["POST"]),
-            Route("/echo", endpoint=self._echo_req, methods=["POST"]),
-            Route("/health", endpoint=self._health_req, methods=["GET", "POST"]),
-            Route("/info", endpoint=self._info_req, methods=["POST"]),
-            Route("/lock", endpoint=self._lock_req, methods=["POST"]),
-            WebSocketRoute("/logs", endpoint=self._logs_req),
-            Route("/merge", endpoint=self._merge_req, methods=["POST"]),
-            Route("/notebook", endpoint=self._notebook_req, methods=["POST"]),
-            Route("/save", endpoint=self._save_req, methods=["POST"]),
-            Route("/set", endpoint=self._set_req, methods=["POST"]),
-            Route("/source", endpoint=self._source_req, methods=["POST"]),
-            WebSocketRoute("/stream", endpoint=self._stream_req),
-            Route("/sync", endpoint=self._sync_req, methods=["POST"]),
-            Route("/unlock", endpoint=self._unlock_req, methods=["POST"]),
-            Route("/base_names", endpoint=self._base_names_req, methods=["POST"]),
-            Route(
-                "/clean_artifacts", endpoint=self._clean_artifacts_req, methods=["POST"]
-            ),
-            Route("/find", endpoint=self._find_req, methods=["POST"]),
-            Route("/from_env", endpoint=self._from_env_req, methods=["POST"]),
-            Route("/labels", endpoint=self._labels_req, methods=["POST"]),
-            Route("/load", endpoint=self._load_req, methods=["POST"]),
-            Route("/name", endpoint=self._name_req, methods=["POST"]),
-            Route("/opts_schema", endpoint=self._opts_schema_req, methods=["POST"]),
-            Route("/schema", endpoint=self._schema_req, methods=["POST"]),
-            Route("/short_name", endpoint=self._short_name_req, methods=["POST"]),
-            Route("/store_cls", endpoint=self._store_cls_req, methods=["POST"]),
-            Route("/versions", endpoint=self._versions_req, methods=["POST"]),
-        ]
+        return [Route('/diff', endpoint=self._diff_req, methods=['POST']), Route('/health', endpoint=self._health_req, methods=['GET','POST']), Route('/info', endpoint=self._info_req, methods=['POST']), Route('/lock', endpoint=self._lock_req, methods=['POST']), WebSocketRoute('/logs', endpoint=self._logs_req), Route('/merge', endpoint=self._merge_req, methods=['POST']), Route('/notebook', endpoint=self._notebook_req, methods=['POST']), Route('/ret', endpoint=self._ret_req, methods=['POST']), Route('/save', endpoint=self._save_req, methods=['POST']), Route('/source', endpoint=self._source_req, methods=['POST']), Route('/sync', endpoint=self._sync_req, methods=['POST']), Route('/unlock', endpoint=self._unlock_req, methods=['POST']), Route('/base_names', endpoint=self._base_names_req, methods=['POST']), Route('/clean_artifacts', endpoint=self._clean_artifacts_req, methods=['POST']), Route('/find', endpoint=self._find_req, methods=['POST']), Route('/from_env', endpoint=self._from_env_req, methods=['POST']), Route('/labels', endpoint=self._labels_req, methods=['POST']), Route('/load', endpoint=self._load_req, methods=['POST']), Route('/name', endpoint=self._name_req, methods=['POST']), Route('/opts_schema', endpoint=self._opts_schema_req, methods=['POST']), Route('/schema', endpoint=self._schema_req, methods=['POST']), Route('/short_name', endpoint=self._short_name_req, methods=['POST']), Route('/store_cls', endpoint=self._store_cls_req, methods=['POST']), Route('/versions', endpoint=self._versions_req, methods=['POST'])]
 
 
-o = BarServer.from_env()
+o = BazServer.from_env()
 pkgs = o._reload_dirs()
 
 app = Starlette(routes=o._routes())
 
 # self.schemas = SchemaGenerator(
-#     {"openapi": "3.0.0", "info": {"title": Bar, "version": o.scm.sha()}}
+#     {"openapi": "3.0.0", "info": {"title": Baz, "version": o.scm.sha()}}
 # )
 
 if __name__ == "__main__":
@@ -749,3 +671,4 @@ if __name__ == "__main__":
         reload=True,
         reload_dirs=pkgs.keys(),
     )
+        
