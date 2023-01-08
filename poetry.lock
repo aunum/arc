@@ -301,6 +301,18 @@ python-versions = ">=3.6.0"
 unicode_backport = ["unicodedata2"]
 
 [[package]]
+name = "cli-exit-tools"
+version = "1.2.3.2"
+description = "functions to exit an cli application properly"
+category = "main"
+optional = false
+python-versions = ">=3.6.0"
+
+[package.dependencies]
+click = "*"
+lib-detect-testenv = "*"
+
+[[package]]
 name = "click"
 version = "8.1.3"
 description = "Composable command line interface toolkit"
@@ -1036,6 +1048,31 @@ description = "A fast and thorough lazy object proxy."
 category = "dev"
 optional = false
 python-versions = ">=3.6"
+
+[[package]]
+name = "lib-detect-testenv"
+version = "2.0.2.2"
+description = "detects if pytest or doctest or pyrunner on pycharm is running"
+category = "main"
+optional = false
+python-versions = ">=3.6.0"
+
+[package.dependencies]
+cli-exit-tools = "*"
+click = "*"
+
+[[package]]
+name = "lib-programname"
+version = "2.0.5"
+description = "get reliably the name of the executed script"
+category = "main"
+optional = false
+python-versions = ">=3.6.0"
+
+[package.dependencies]
+cli-exit-tools = "*"
+click = "*"
+lib-detect-testenv = "*"
 
 [[package]]
 name = "libclang"
@@ -2475,7 +2512,7 @@ test = ["pytest", "pytest-cov"]
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.10.1,<3.11"
-content-hash = "fa4754c85f095c43bbe7fbb05d8dac0e04a4c2fd5c3876c3057a21dd73708a03"
+content-hash = "1b7be5b9cf9a56b7be0aa82da5f01f852aaf66f45438298b9db76698829693f0"
 
 [metadata.files]
 absl-py = [
@@ -2675,6 +2712,15 @@ chardet = [
 charset-normalizer = [
     {file = "charset-normalizer-2.1.1.tar.gz", hash = "sha256:5a3d016c7c547f69d6f81fb0db9449ce888b418b5b9952cc5e6e66843e9dd845"},
     {file = "charset_normalizer-2.1.1-py3-none-any.whl", hash = "sha256:83e9a75d1911279afd89352c68b45348559d1fc0506b054b346651b5e7fee29f"},
+]
+cli-exit-tools = [
+    {file = "cli_exit_tools-1.2.3.2-py3-none-any.whl", hash = "sha256:6268d51e6ac400fc2f349be2c81c1e7bb9cb3ff94e4058fa5220620c0aadae9f"},
+    {file = "cli_exit_tools-1.2.3.2-py3.10.egg", hash = "sha256:534a6e7fee31f5f505bae256f88a216b03f5b8bc2202468f9d1482342c10fdc6"},
+    {file = "cli_exit_tools-1.2.3.2-py3.6.egg", hash = "sha256:a3759614d4cd5734bd218c3a68b5baf9019a0aa94158fc8da95745438730d523"},
+    {file = "cli_exit_tools-1.2.3.2-py3.7.egg", hash = "sha256:9710a58b3b14ee7ac9b9dbc7e7262844c6a848481650bba7f751d63f332746c9"},
+    {file = "cli_exit_tools-1.2.3.2-py3.8.egg", hash = "sha256:41450f3b845be1b9499535903d6c64ed486747d52a36613bd92ba22aeae6afa5"},
+    {file = "cli_exit_tools-1.2.3.2-py3.9.egg", hash = "sha256:b744b24a2e689c939be28050caa9cc14c739a83c379e2e52319fd660a3ce7454"},
+    {file = "cli_exit_tools-1.2.3.2.tar.gz", hash = "sha256:60e798a219c5e3bf42ca309575afdbae22808b55bcf030554a61ea21c68fc206"},
 ]
 click = [
     {file = "click-8.1.3-py3-none-any.whl", hash = "sha256:bb4d8133cb15a609f44e8213d9b391b0809795062913b383c62be0ee95b1db48"},
@@ -3181,6 +3227,24 @@ lazy-object-proxy = [
     {file = "lazy_object_proxy-1.7.1-cp39-cp39-win32.whl", hash = "sha256:2130db8ed69a48a3440103d4a520b89d8a9405f1b06e2cc81640509e8bf6548f"},
     {file = "lazy_object_proxy-1.7.1-cp39-cp39-win_amd64.whl", hash = "sha256:677ea950bef409b47e51e733283544ac3d660b709cfce7b187f5ace137960d61"},
     {file = "lazy_object_proxy-1.7.1-pp37.pp38-none-any.whl", hash = "sha256:d66906d5785da8e0be7360912e99c9188b70f52c422f9fc18223347235691a84"},
+]
+lib-detect-testenv = [
+    {file = "lib_detect_testenv-2.0.2.2-py3-none-any.whl", hash = "sha256:e2d63e1013b0b408f4366e62ecb3fbb3977e407561c3fc8c75b8701f9a263cc2"},
+    {file = "lib_detect_testenv-2.0.2.2-py3.10.egg", hash = "sha256:21378e07a2027a66036f5e52ff799877cd99334a7c19adae02ec326bc699735a"},
+    {file = "lib_detect_testenv-2.0.2.2-py3.6.egg", hash = "sha256:ef81fb56dc524288b76abcbcdcfd91e47058ac81443b2d360f6ae93c3d06ab40"},
+    {file = "lib_detect_testenv-2.0.2.2-py3.7.egg", hash = "sha256:caa62fdea8a946ada4cef3d4149836017c7d02162a816665a56f7c33581cbe43"},
+    {file = "lib_detect_testenv-2.0.2.2-py3.8.egg", hash = "sha256:28b8d30876416b389447cb003515adba3bc4ea556ca7716ce1fb02faa663feeb"},
+    {file = "lib_detect_testenv-2.0.2.2-py3.9.egg", hash = "sha256:2414807c935331d9e95a1fcf3aa6627b6ac6e346e9c0cef71bff78b662704a9c"},
+    {file = "lib_detect_testenv-2.0.2.2.tar.gz", hash = "sha256:d8c4d5d725250ab7bff2a5bd4a9f628171e0a5372094f8e34d0e76281d4fca6d"},
+]
+lib-programname = [
+    {file = "lib_programname-2.0.5-py3-none-any.whl", hash = "sha256:8beabc1cb1e11009acfcffeaf2db43efe853e58d8adc28a9914489cb4ada1f4e"},
+    {file = "lib_programname-2.0.5-py3.10.egg", hash = "sha256:4c7bfd29ab757b16c7d6a959e4d1d99ac603c1547ccf2cb94fd8cf5ef7c3d66c"},
+    {file = "lib_programname-2.0.5-py3.6.egg", hash = "sha256:7e836306ae8b3bbed5fefffd1937509292e848e67bbc604db77c54c9506f3817"},
+    {file = "lib_programname-2.0.5-py3.7.egg", hash = "sha256:931936d2d168002edba1ed65eaee09af1129f25bbd8ef218e98583be19151bd0"},
+    {file = "lib_programname-2.0.5-py3.8.egg", hash = "sha256:e7a18532dc8f288c6a5ea0819e52f53b9e2befe9a7688638b041f7213143bc68"},
+    {file = "lib_programname-2.0.5-py3.9.egg", hash = "sha256:489ed6edd87611358859b7f6cf04ca01d0c020fa4d67cbf60a2ca6b196f85408"},
+    {file = "lib_programname-2.0.5.tar.gz", hash = "sha256:9a5cbfb1fe4bcad403acc7af08057c3db4de8856ca0ac960c8c24345033277e6"},
 ]
 libclang = [
     {file = "libclang-14.0.6-py2.py3-none-macosx_10_9_x86_64.whl", hash = "sha256:8791cf3c3b087c373a6d61e9199da7a541da922c9ddcfed1122090586b996d6e"},

@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
 import uvicorn
+from arc.core.resource import is_annotation_match, is_json_type_match  # noqa
 
 from resource_test import *
 from resource_test import Bar
@@ -42,8 +43,35 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.add(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
+
+        return JSONResponse(_ret)
+
+    async def _bake_hams_req(self, request):
+        """Request for function:
+        bake_hams(self, ham_by_name: Dict[str, __main__.Ham]) -> Dict[str, __main__.Ham]
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        print("calling function: ", _jdict)
+        _ret = self.bake_hams(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -64,7 +92,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.diff(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -86,7 +117,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.echo(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -107,7 +141,10 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
 
+        print("calling function: ", _jdict)
         _ret = self.health(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -127,7 +164,10 @@ class BarServer(Bar):
         headers = request.headers
         logging.debug(f"headers: {headers}")
 
+        print("calling function: ", _jdict)
         _ret = self.info(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -169,7 +209,10 @@ class BarServer(Bar):
                     f"Argument could not be deserialized: timeout - type: {type(_jdict['key'])}"
                 )
 
+        print("calling function: ", _jdict)
         _ret = self.lock(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -219,7 +262,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.merge(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -241,7 +287,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.notebook(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -263,7 +312,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.save(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -285,7 +337,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.set(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -307,7 +362,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.source(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -357,7 +415,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.sync(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -389,7 +450,10 @@ class BarServer(Bar):
                     f"Argument could not be deserialized: key - type: {type(_jdict['key'])}"
                 )
 
+        print("calling function: ", _jdict)
         _ret = self.unlock(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -411,7 +475,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.base_names(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
@@ -433,7 +500,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.clean_artifacts(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": None}
 
         return JSONResponse(_ret)
@@ -460,7 +530,10 @@ class BarServer(Bar):
             setattr(_obj, _k, _v)
         _jdict["locator"] = _obj
 
+        print("calling function: ", _jdict)
         _ret = self.find(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
@@ -482,7 +555,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.from_env(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -504,7 +580,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.labels(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -525,7 +604,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.load(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -547,7 +629,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.name(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -569,7 +654,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.opts_schema(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -590,7 +678,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.schema(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -612,7 +703,10 @@ class BarServer(Bar):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
+        print("calling function: ", _jdict)
         _ret = self.short_name(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -639,7 +733,10 @@ class BarServer(Bar):
                 _jdict["sync_strategy"]
             )
 
+        print("calling function: ", _jdict)
         _ret = self.store_cls(**_jdict)
+
+        print("called function: ", _ret)
         _ret = {"response": _ret}
 
         return JSONResponse(_ret)
@@ -665,8 +762,8 @@ class BarServer(Bar):
 
             if _jdict["repositories"] is None:
                 pass
-            elif type(_jdict["repositories"]) == typing.List:
-                pass
+            elif json_is_type_match(typing.List[str], _jdict["repositories"]):
+                print("checking type match match for typing.List")
             else:
                 raise ValueError(
                     f"Argument could not be deserialized: repositories - type: {type(_jdict['key'])}"
@@ -676,9 +773,8 @@ class BarServer(Bar):
 
             if _jdict["cfg"] is None:
                 pass
-            elif self._is_annotation_match(
-                arc.config.Config.__annotations__, _jdict["cfg"]
-            ):
+            elif is_annotation_match(arc.config.Config.__annotations__, _jdict["cfg"]):
+                print("checking annotation match for arc.config.Config")
 
                 _obj = object.__new__(arc.config.Config)
                 for _k, _v in _jdict["cfg"].items():
@@ -690,7 +786,10 @@ class BarServer(Bar):
                     f"Argument could not be deserialized: cfg - type: {type(_jdict['key'])}"
                 )
 
+        print("calling function: ", _jdict)
         _ret = self.versions(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
@@ -698,6 +797,7 @@ class BarServer(Bar):
     def _routes(self) -> List[BaseRoute]:
         return [
             Route("/add", endpoint=self._add_req, methods=["POST"]),
+            Route("/bake_hams", endpoint=self._bake_hams_req, methods=["POST"]),
             Route("/diff", endpoint=self._diff_req, methods=["POST"]),
             Route("/echo", endpoint=self._echo_req, methods=["POST"]),
             Route("/health", endpoint=self._health_req, methods=["GET", "POST"]),

@@ -791,15 +791,157 @@ class Client(Kind):
         self.delete()
 
 
-def is_annotation_match(annotations: Dict[str, Type], d: Dict[str, Any]) -> bool:
-    for name, t in annotations.items():
-        if name not in d:
+def is_annotation_match(annotations: Dict[str, Type], obj: Any) -> bool:
+    """Checks if a types annotations match an object
+
+    Args:
+        annotations (Dict[str, Type]): Annotations of a type
+        obj (Any): An object
+
+    Returns:
+        bool: Whether they match
+    """
+    print("checking annotations: ", annotations)
+    print("against obj: ", obj)
+
+    if isinstance(obj, dict):
+        pass
+    elif hasattr(obj, "__dict__"):
+        obj = obj.__dict__
+    else:
+        raise ValueError(f"unable to check annotations for type '{type(obj)}', please raise an issue")
+
+    for k, v in obj.items():
+
+        if k not in annotations:
             return False
 
-        if not isinstance(d[name], t):
+        if not isinstance(v, annotations[k]):
+            print("obj[name] is not type: ", t)
             return False
 
     return True
+
+
+def json_is_type_match(t: Type, jsn: Dict[str, Any]) -> bool:
+    """Checks if the gien type matchs the JSON dictionary
+
+    Args:
+        t (Type): A type to check against
+        jsn (Dict[str, Any]): JSON dict to check
+
+    Returns:
+        bool: Whether they match
+    """
+    if "response" in jsn:
+        jsn = jsn["response"]
+    if hasattr(t, "__annotations__"):
+        return is_annotation_match(t.__annotations__, jsn)
+    elif t == dict or (hasattr(t, "__origin__") and t.__origin__ == dict):
+        args = get_args(t)
+        if len(args) != 2:
+            raise ValueError(f"dictionary must by typed: {t}")
+        for k, v in jsn.items():
+            if hasattr(args[0], "__annotations__"):
+                if not is_annotation_match(args[0].__annotations__, k):
+                    return False
+            else:
+                if type(k) != args[0]:
+                    return False
+
+            if hasattr(args[1], "__annotations__"):
+                if not is_annotation_match(args[1].__annotations__, v):
+                    return False
+            else:
+                if type(v) != args[1]:
+                    return False
+        return True
+
+    elif t == list or (hasattr(t, "__origin__") and t.__origin__ == list):
+        args = get_args(t)
+        if len(args) != 1:
+            raise ValueError(f"list must by typed: {t}")
+        for v in jsn:
+            if hasattr(args[0], "__annotations__"):
+                if not is_annotation_match(args[0].__annotations__, v):
+                    return False
+            else:
+                if type(v) != args[0]:
+                    return False
+        return True
+
+    elif t in FIRST_ORDER_PRIMITIVES:
+        return t == type(jsn)
+
+    elif t is None:
+        return jsn is None
+
+    else:
+        raise ValueError(f"type not supported: {t}")
+
+
+def deep_isinstance(obj: Any, t: Type) -> bool:
+    """A variation of isinstance that works with type variables
+
+    Args:
+        obj (Any): Object to check
+        t (Type): Type to check against
+
+    Returns:
+        bool: Whether it is an instance
+    """
+    if t == dict or (hasattr(t, "__origin__") and t.__origin__ == dict):
+        args = get_args(t)
+        if len(args) != 2:
+            raise ValueError(f"dictionary must by typed: {t}")
+        if args[1] == typing.Any:
+            return True
+        for k, v in obj.items():
+            if not isinstance(v, args[1]):
+                return False
+        return True
+
+    elif t == list or (hasattr(t, "__origin__") and t.__origin__ == list):
+        args = get_args(t)
+        if args[0] == typing.Any:
+            return True
+        if len(args) != 1:
+            raise ValueError(f"list must by typed: {t}")
+        return isinstance(obj[0], args[0])
+
+    elif hasattr(t, "__annotations__"):
+        return isinstance(obj, t)
+
+    elif t in FIRST_ORDER_PRIMITIVES:
+        if t == type(obj):
+            return True
+        return False
+
+    elif t is None:
+        if obj is None:
+            return True
+        return False
+
+    else:
+        raise ValueError(f"type not supported: {t}")
+
+
+def is_type(t: Type) -> bool:
+    if t == typing.Type or t == type or (hasattr(t, "__origin__") and t.__origin__ == type):
+        return True
+    return False
+
+
+def is_dict(t: Type) -> bool:
+    if t == dict or (hasattr(t, "__origin__") and t.__origin__ == dict):
+        return True
+    return False
+
+
+def is_list(t: Type) -> bool:
+    if t == list or (hasattr(t, "__origin__") and t.__origin__ == list):
+        return True
+    return False
 
 
 def init_wrapper(method):
@@ -905,6 +1047,8 @@ def is_iterable_cls(t: Type) -> bool:
 
     return False
 
+
+FIRST_ORDER_PRIMITIVES = [int, str, float, bool, bytes]
 
 # class CombinedMeta(ResourceMetaClass, ABCMeta):
 #     pass
@@ -1793,11 +1937,11 @@ if __name__ == "__main__":
             default: Optional[Any] = None,
             optional_dict: Optional[Dict[str, Any]] = None,
         ) -> None:
-            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+            if is_type(t):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
-            if t in [int, list, str, float, bool]:
+            if t in FIRST_ORDER_PRIMITIVES:
                 return
 
             if optional_dict is None:
@@ -1841,9 +1985,10 @@ if __name__ == "__main__":
                         if i > 0:
                             if_line = "elif"
 
+                        arg_hint = cls._proc_arg(arg, import_statements, "")
                         h = cls._build_hint(arg, import_statements)
 
-                        if arg in [int, list, str, float, bool, bytes]:
+                        if arg in FIRST_ORDER_PRIMITIVES:
                             load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
                             load_lines.append(indent("    pass", idt))
                             continue
@@ -1857,14 +2002,29 @@ if __name__ == "__main__":
                             load_lines.append(
                                 indent(f"{if_line} is_annotation_match({h}.__annotations__, _jdict['{key}']):", idt)
                             )
+                            load_lines.append(indent(f"    print('checking annotation match for {h}')", idt))
+                            proc_load(arg, key, load_lines, idt + "    ", default, optional_dict=optional_dict)
+
+                        elif is_list(arg):
+                            load_lines.append(
+                                indent(f"{if_line} json_is_type_match({arg_hint}, _jdict['{key}']):", idt)
+                            )
+                            load_lines.append(indent(f"    print('checking type match match for {h}')", idt))
+                            proc_load(arg, key, load_lines, idt + "    ", default, optional_dict=optional_dict)
+
+                        elif is_dict(arg):
+                            load_lines.append(
+                                indent(f"{if_line} json_is_type_match({arg_hint}, _jdict['{key}']):", idt)
+                            )
+                            load_lines.append(indent(f"    print('checking type match match for {h}')", idt))
                             proc_load(arg, key, load_lines, idt + "    ", default, optional_dict=optional_dict)
 
                         elif hasattr(arg, "__origin__") and arg.__origin__ in [list, dict]:
-                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) == {h}:", idt))
+                            load_lines.append(indent(f"{if_line} type(_jdict['{key}']) in [list, dict]:", idt))
                             load_lines.append(indent("    pass", idt))
                             continue
 
-                        elif arg == typing.Type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
+                        elif is_type(arg):
                             logging.warning("types not yet supported as parameters")
                             raise TypeNotSupportedError()
 
@@ -1893,10 +2053,30 @@ if __name__ == "__main__":
                 # TODO: handle any types, may need some basic checks similar to Union
                 return
 
+            if is_dict(t):
+                args = get_args(t)
+                if len(args) != 2:
+                    raise ValueError(f"Dicts must be typed - {key}: {t}")
+
+                if args[1] in FIRST_ORDER_PRIMITIVES:
+                    return
+
+            if is_list(t):
+                args = get_args(t)
+                if len(args) != 1:
+                    raise ValueError(f"Lists must be typed - {key}: {t}")
+
+                if args[0] in FIRST_ORDER_PRIMITIVES:
+                    return
+
             h = cls._build_hint(t, import_statements)
-            if issubclass(t, enum.Enum):
-                load_lines.append(indent(f"_jdict['{key}'] = {h}(_jdict['{k}'])", idt))
-                return
+
+            try:
+                if issubclass(t, enum.Enum):
+                    load_lines.append(indent(f"_jdict['{key}'] = {h}(_jdict['{k}'])", idt))
+                    return
+            except Exception as e:
+                logging.debug(f"could not check subclass for type '{t}': {e}")
 
             if hasattr(t, "__dict__"):
                 h = cls._build_hint(t, import_statements)
@@ -1910,14 +2090,14 @@ if __name__ == "__main__":
             return
 
         def proc_return(ret: Type, ret_lines: List[str], idt: str = "") -> None:
-            if ret == typing.Type or ret == type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+            if is_type(ret):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
             if ret == NoneType:
                 ret_lines.append(indent("_ret = {'response': None}", idt))
                 return
-            if ret in [int, list, str, float, bool]:
+            if ret in FIRST_ORDER_PRIMITIVES:
                 ret_lines.append(indent("_ret = {'response': _ret}", idt))
                 return
             if ret == dict:
@@ -1940,11 +2120,11 @@ if __name__ == "__main__":
 
                         h = cls._build_hint(arg, import_statements)
 
-                        if ret == typing.Type or ret == type or (hasattr(arg, "__origin__") and arg.__origin__ == type):
+                        if is_type(arg):
                             logging.warning("types not yet supported as parameters")
                             raise TypeNotSupportedError()
 
-                        if arg in [int, list, str, float, bool, bytes]:
+                        if arg in FIRST_ORDER_PRIMITIVES:
                             ret_lines.append(indent(f"{if_line} isinstance(_ret, {h}):", idt))
                             ret_lines.append(indent("    _ret = {'response': _ret}", idt))
                             continue
@@ -1955,12 +2135,14 @@ if __name__ == "__main__":
                             continue
 
                         elif hasattr(arg, "__annotations__"):
-                            ret_lines.append(indent(f"{if_line} is_annotation_match({h}.__annotations__, _ret):", idt))
+                            ret_lines.append(indent(f"{if_line} isinstance(_ret, {h}):", idt))
                             proc_return(arg, ret_lines, idt + "    ")
 
                         # TODO: need to handle dict and list args
                         elif hasattr(arg, "__origin__") and arg.__origin__ in [list, dict]:
-                            ret_lines.append(indent(f"{if_line} isinstance(_ret, {h}):", idt))
+                            ret_lines.append(
+                                indent(f"{if_line} isinstance(_ret, list) or isinstance(_ret, dict):", idt)
+                            )
                             ret_lines.append(indent("    pass", idt))
                             continue
 
@@ -2142,7 +2324,10 @@ if __name__ == "__main__":
         {check_lock_line}
 
 {joined_load_lines}
+        print("calling function: ", _jdict)
         _ret = self.{name}(**_jdict)
+
+        print("called function: ", _ret)
 {fin_ser_lines}
         return JSONResponse(_ret)
 """
@@ -2185,7 +2370,7 @@ from starlette.responses import JSONResponse
 from starlette.schemas import SchemaGenerator
 from starlette.routing import Route, WebSocketRoute, BaseRoute
 import uvicorn
-from arc.core.resource import is_annotation_match  # noqa
+from arc.core.resource import is_annotation_match, is_json_type_match  # noqa
 
 from {cls_file} import *
 from {cls_file} import {cls.__name__}
@@ -2242,15 +2427,15 @@ if __name__ == "__main__":
         logging.info(f"writing server file to {filepath}")
         with open(filepath, "w", encoding="utf-8") as f:
             server_code = cls._gen_server()
-            # server_code = format_str(server_code, mode=FileMode())
+            server_code = format_str(server_code, mode=FileMode())
             f.write(server_code)
         return filepath
 
     @classmethod
     def _build_hint(cls, h: Type, imports: Dict[str, Any], module: Optional[str] = None) -> str:
-        print("----")
-        print("building hint for type: ", h)
-        print("module: ", module)
+        # print("----")
+        # print("building hint for type: ", h)
+        # print("module: ", module)
 
         if hasattr(h, "__forward_arg__"):
             if module == "__main__":
@@ -2273,8 +2458,6 @@ if __name__ == "__main__":
                 if h.__module__ == "__main__":
                     p = inspect.getfile(cls)
                     print("path: ", p)
-                    if hasattr(cls, "__file__"):
-                        print("__file__: ", cls.__file__)
                     filename = os.path.basename(p)
 
                     print("filename: ", filename)
@@ -2317,6 +2500,23 @@ if __name__ == "__main__":
             return f"{mod}.{str(h)}"
 
     @classmethod
+    def _proc_arg(cls, t: Type, imports: Dict[str, Any], fin_param: str, module: Optional[str] = None) -> str:
+        ret_param = cls._build_hint(t, imports, module)
+        args = typing.get_args(t)
+        if is_optional(t):
+            args = args[:-1]
+
+        ret_params: List[str] = []
+        for arg in args:
+            ret_params.append(cls._proc_arg(arg, imports, fin_param, module))
+
+        if len(ret_params) > 0:
+            ret_param = f"{ret_param}[{', '.join(ret_params)}]"
+
+        ret_param = fin_param + ret_param
+        return ret_param
+
+    @classmethod
     def _gen_client(cls) -> str:
         """Generate a client for the server
 
@@ -2345,31 +2545,15 @@ if __name__ == "__main__":
                 return f"{name}: {_type}"
             return f"{name}"
 
-        def proc_arg(t: Type, imports: Dict[str, Any], fin_param: str, module: Optional[str] = None) -> str:
-            ret_param = cls._build_hint(t, imports, module)
-            args = typing.get_args(t)
-            if is_optional(t):
-                args = args[:-1]
-
-            ret_params: List[str] = []
-            for arg in args:
-                ret_params.append(proc_arg(arg, imports, fin_param, module))
-
-            if len(ret_params) > 0:
-                ret_param = f"{ret_param}[{', '.join(ret_params)}]"
-
-            ret_param = fin_param + ret_param
-            return ret_param
-
         def get_ser_by_type(name: str, t: Type) -> str:
-            if t == typing.Type or (hasattr(t, "__origin__") and t.__origin__ == type):
+            if is_type(t):
                 logging.warning("types not yet supported as parameters")
                 return ""
 
             if t == NoneType:
                 return "None"
 
-            if t in [int, list, str, float, bool, bytes]:
+            if t in FIRST_ORDER_PRIMITIVES:
                 return name
 
             _op = getattr(t, "to_dict", None)
@@ -2382,7 +2566,10 @@ if __name__ == "__main__":
             return name
 
         def build_dict(name: str, t: Type, params: List[str], ser_lines: List[str], is_args: bool = False) -> None:
-            if t == typing.Type or t == type or (hasattr(t, "__origin__") and t.__origin__ == type):
+            print("build dict type: ", t)
+            print("build dict str: ", str(t))
+
+            if is_type(t):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
@@ -2395,9 +2582,21 @@ if __name__ == "__main__":
                 params.append(f"'{name}': {name}")
                 return
 
-            if t in [int, list, str, float, bool, bytes]:
+            if t in FIRST_ORDER_PRIMITIVES:
                 params.append(f"'{name}': {name}")
                 return
+
+            if is_dict(t):
+                args = get_args(t)
+                if len(args) != 2:
+                    raise ValueError(f"Dictionary must by typed: {name}")
+                pass
+
+            if is_list(t):
+                args = get_args(t)
+                if len(args) != 1:
+                    raise ValueError(f"Lists must by typed: {name}")
+                pass
 
             if t == NoneType:
                 params.append(f"'{name}': None")
@@ -2416,19 +2615,27 @@ if __name__ == "__main__":
                     if len(args) == 2 and args[1] == NoneType:
                         # Handle optionals
                         args = (args[1], args[0])
+
                     for i, arg in enumerate(args):
+                        print("arg: ", arg)
+                        print("arg module: ", arg.__module__)
+                        if_line = "if"
+                        if i > 0:
+                            if_line = "elif"
+                        arg_hint = cls._proc_arg(arg, import_statements, "")
+                        print("arg hint: ", arg_hint)
+
                         h = cls._build_hint(arg, import_statements)
                         if h == "None":
                             h = "NoneType"
                             import_statements["from types import NoneType"] = None
-                        if i == 0:
-                            ser_lines.append(f"if isinstance({name}, {h}):")
-                            ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
-                        else:
-                            ser_lines.append(f"elif isinstance({name}, {h}):")
-                            ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}")
+
+                        ser_lines.append(f"{if_line} deep_isinstance({name}, {arg_hint}):")
+                        ser_lines.append(f"    _{name} = {get_ser_by_type(name, arg)}  # type: ignore")
                     ser_lines.append("else:")
-                    ser_lines.append(f"    raise ValueError(\"Do not know how to serialize parameter '{name}'\")")
+                    ser_lines.append(
+                        f"    raise ValueError(f\"Do not know how to serialize parameter '{name}' of type '{{type({name})}}'\")"
+                    )
                     params.append(f"'{name}': _{name}")
                     return
 
@@ -2446,49 +2653,128 @@ if __name__ == "__main__":
             params.append(f"'{name}': {name}")
             return
 
-        def proc_return(ret: Type, ser_lines: List[str], working_module: str, idt: str = "") -> None:
-            ret_op = getattr(ret, "from_dict", None)
-            ret_type = cls._build_hint(orig_ret, import_statements, working_module)
+        def proc_return(
+            ret: Type,
+            ser_lines: List[str],
+            working_module: str,
+            idt: str = "",
+            jdict_name: str = "_jdict",
+            ret_union: bool = False,
+        ) -> None:
+            """Process the return serialization
 
-            if ret == typing.Type or ret == type or (hasattr(ret, "__origin__") and ret.__origin__ == type):
+            Args:
+                ret (Type): The return type
+                ser_lines (List[str]): The lines of code to use for serialization
+                working_module (str): The working module
+                idt (str, optional): Indent to use. Defaults to "".
+                jdict_name (str, optional): Name of the proverbial '_jdict' param, this may change in nested for loops. Defaults to "_jdict".
+                ret_union (bool, optional): Whether this is a recursive pass in a nested Union_. Defaults to False.
+            """
+            print("processing return for ret: ", ret)
+            ret_op = getattr(ret, "from_dict", None)
+            # ret_type = cls._build_hint(orig_ret, import_statements, working_module)
+            ret_type = cls._build_hint(ret, import_statements, working_module)
+            print("ret type: ", ret_type)
+            ret_hint = cls._proc_arg(ret, import_statements, "", working_module)
+
+            if is_type(ret):
                 logging.warning("types not yet supported as parameters")
                 raise TypeNotSupportedError()
 
             if ret == NoneType:
-                ser_lines.append(indent("_ret = _jdict['response']", idt))
+                ser_lines.append(indent(f"_ret = {jdict_name}", idt))
             elif callable(ret_op):
-                ser_lines.append(indent(f"_ret = {ret_type}.from_dict(_jdict)", idt))
-            elif ret in [int, list, str, float, bool] or (
-                hasattr(ret, "__origin__") and ret.__origin__ in [int, list, str, float, bool]
+                ser_lines.append(indent(f"_ret = {ret_type}.from_dict({jdict_name})", idt))
+            elif ret in FIRST_ORDER_PRIMITIVES or (
+                hasattr(ret, "__origin__") and ret.__origin__ in FIRST_ORDER_PRIMITIVES
             ):
-                ser_lines.append(indent("_ret = _jdict['response']", idt))
-            elif ret == dict or (hasattr(ret, "__origin__") and ret.__origin__ == dict):
-                ser_lines.append(indent("_ret = _jdict", idt))
+                ser_lines.append(indent(f"_ret = {jdict_name}", idt))
+            elif is_list(ret):
+                args = get_args(ret)
+                print("args: ", args)
+                if len(args) == 0:
+                    raise SystemError(f"List must be typed: {ret}")
+
+                if args[0] in FIRST_ORDER_PRIMITIVES or (
+                    hasattr(args[0], "__origin__") and args[0].__origin__ in FIRST_ORDER_PRIMITIVES
+                ):
+                    ser_lines.append(indent(f"_ret = {jdict_name}", idt))
+                else:
+                    ser_lines.append(indent(f"_ret_list: {ret_type} = []", idt))
+                    ser_lines.append(indent(f"for v in {jdict_name}:", idt))
+                    proc_return(args[0], ser_lines, working_module, idt + "    ", "v")
+                    ser_lines.append(indent("    _ret_list.append(_ret)", idt))
+                    ser_lines.append(indent("_ret = _ret_list", idt))
+            elif is_dict(ret):
+                args = get_args(ret)
+                print("args: ", args)
+                if len(args) != 2:
+                    raise SystemError(f"Dict must be typed: {ret}")
+
+                if not ret_union:
+                    ser_lines.append(indent(f"if not json_is_type_match({ret_hint}, {jdict_name}):", idt))
+                    ser_lines.append(indent(f"    raise ValueError('JSON returned does not match type: {ret}')", idt))
+
+                if args[1] in FIRST_ORDER_PRIMITIVES or (
+                    hasattr(args[1], "__origin__") and args[0].__origin__ in FIRST_ORDER_PRIMITIVES
+                ):
+                    ser_lines.append(indent(f"_ret = {jdict_name}", idt))
+
+                else:
+                    ser_lines.append(indent(f"_ret_dict: {ret_hint} = {{}}", idt))
+                    ser_lines.append(indent(f"for k, v in {jdict_name}.items():", idt))
+                    proc_return(args[1], ser_lines, working_module, idt + "    ", "v")
+                    ser_lines.append(indent("    _ret_dict[k] = _ret  # type: ignore", idt))
+                    ser_lines.append(indent("_ret = _ret_dict", idt))
+
+            elif ret == typing.Any:
+                ser_lines.append(indent(f"_ret = {jdict_name}", idt))
+
             elif hasattr(ret, "__origin__"):
+                print("ret origin: ", ret.__origin__)
                 if ret.__origin__ == typing.Union:
                     args = get_args(ret)
+                    print("args: ", args)
                     if len(args) == 0:
                         raise SystemError("args for iterable are None")
-                    ser_lines.append(indent("_deserialized: bool = False", idt))
+                    # ser_lines.append(indent("_deserialized: bool = False", idt))
                     for i, arg in enumerate(args):
+                        if_line = "if"
+                        if i > 0:
+                            if_line = "elif"
+
+                        print("building hint for arg: ", arg)
+                        arg_hint = cls._proc_arg(arg, import_statements, "", working_module)
+                        print("arg hint: ", arg_hint)
                         # this needs to be recursive
-                        ser_lines.append(indent("if not _deserialized:", idt))
-                        ser_lines.append(indent("    try:", idt))
-                        proc_return(arg, ser_lines, working_module, "        ")
-                        ser_lines.append(indent("    except:  # noqa", idt))
-                        ser_lines.append(indent("        pass", idt))
-                    ser_lines.append(indent("if not _deserialized:", idt))
-                    ser_lines.append(indent("    raise ValueError('unable to deserialize returned value')", idt))
+                        ser_lines.append(indent(f"{if_line} json_is_type_match({arg_hint}, {jdict_name}):", idt))
+                        proc_return(arg, ser_lines, working_module, "    ", jdict_name, True)
+
+                    ser_lines.append(indent("else:", idt))
+                    ser_lines.append(
+                        indent("    raise ValueError(f'Unable to deserialize return value: {type(_ret)}')", idt)
+                    )
                 else:
+                    print("ret generic origin")
                     # generic origin
-                    ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
-                    ser_lines.append(indent("for k, v in _jdict.items():", idt))
+                    ser_lines.append(
+                        indent(f"if not is_annotation_match({ret_type}.__annotations__, {jdict_name}):", idt)
+                    )
+                    ser_lines.append(
+                        indent(f"    raise ValueError('JSON returned does not match type: {ret_type}')", idt)
+                    )
+                    ser_lines.append(indent(f"_ret = object.__new__({ret_type}  # type: ignore)", idt))
+                    ser_lines.append(indent(f"for k, v in {jdict_name}.items():", idt))
                     ser_lines.append(indent("    setattr(_ret, k, v)", idt))
             elif issubclass(ret, enum.Enum):
-                ser_lines.append(indent(f"_ret = {ret_type}(_jdict['response'])", idt))
+                ser_lines.append(indent(f"_ret = {ret_type}({jdict_name})", idt))
             else:
-                ser_lines.append(indent(f"_ret = object.__new__({ret_type})", idt))
-                ser_lines.append(indent("for k, v in _jdict.items():", idt))
+                print("creating return object for type: ", ret_type)
+                ser_lines.append(indent(f"if not is_annotation_match({ret_type}.__annotations__, {jdict_name}):", idt))
+                ser_lines.append(indent(f"    raise ValueError('JSON returned does not match type: {ret_type}')", idt))
+                ser_lines.append(indent(f"_ret = object.__new__({ret_type})  # type: ignore", idt))
+                ser_lines.append(indent(f"for k, v in {jdict_name}.items():", idt))
                 ser_lines.append(indent("    setattr(_ret, k, v)", idt))
 
             # We could check for a data class here
@@ -2529,7 +2815,7 @@ if __name__ == "__main__":
                 if str(param).startswith("**"):
                     name = f"**{param.name}"
 
-                fin_param = build_param(name, proc_arg(param.annotation, imports, "", module))
+                fin_param = build_param(name, cls._proc_arg(param.annotation, imports, "", module))
 
                 # TODO: handle Union
                 if param.default is not param.empty:
@@ -2610,7 +2896,7 @@ if __name__ == "__main__":
                 orig_ret = ret
 
             # we need to handle generic types here
-            fin_param = proc_arg(orig_ret, import_statements, "", fn.__module__)
+            fin_param = cls._proc_arg(orig_ret, import_statements, "", fn.__module__)
             fin_sig += f" -> {fin_param}:"
 
             ret_ser_lines: List[str] = []
@@ -2669,6 +2955,9 @@ if __name__ == "__main__":
                 if code == 8:
                     break
                 _jdict = json.loads(_data)
+                if 'reponse' in _jdict:
+                    _jdict = _jdict['response']
+                _ret: {fin_param}
 {ret_ser_lines_joined}
                 yield _ret
 
@@ -2695,23 +2984,44 @@ if __name__ == "__main__":
         )
         _resp = request.urlopen(_req)
         _data = _resp.read().decode("utf-8")
+        print("_data: ", _data)
         _jdict = json.loads(_data)
+
+        if 'reponse' in _jdict:
+            _jdict = _jdict['response']
+        print("_jdict: ", _jdict)
+
+        _ret: {fin_param}
 {ret_ser_lines_joined}
         return _ret
             """
             client_fns.append(client_fn)
 
+        # you are here
+        # We need to do a conditional import of __main__ based on whether the resource file is __main__
         imports_joined = "\n".join(import_statements.keys())
         client_fns_joined = "".join(client_fns)
+
+        m = importlib.import_module(cls.__module__)
+        if m.__file__ is None:
+            raise ValueError("could not find the path of the executing script, if you hit this please create an issue")
+        filename = os.path.basename(m.__file__)
         client_file = f"""
 from urllib import request, parse
 import json
 import logging
 import urllib
+import os
 from typing import Type
+from pathlib import Path
 
-from arc.core.resource import Client, is_annotation_match # noqa
+import lib_programname
+from arc.core.resource import Client, is_annotation_match, json_is_type_match, deep_isinstance # noqa
 {imports_joined}
+
+if lib_programname.get_path_executed_script() == Path(os.path.dirname(__file__)).joinpath(Path('{filename}')):
+    print("\\n\\n!!!!!!!! importing from __main__!!!!! \\n\\n")
+    import __main__ as resource_test
 
 class {cls.__name__}Client(Client):
 

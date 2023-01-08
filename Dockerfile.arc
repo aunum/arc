@@ -13,11 +13,11 @@ COPY ./poetry.lock ./pyproject.toml /app/
 RUN poetry install --no-ansi --no-root
 COPY .git /app/.git/
 EXPOSE 8000
-COPY ["arc/core/lotsofunions_client.py", "arc/core/lotsofunions_server.py", "arc/core/bar_client.py", "arc/core/bar_server.py", "arc/core/client_builder.py", "arc/core/client_builder_test.py", "arc/core/foo.ipynb", "arc/core/foo_client.py", "arc/core/foo_server.py", "arc/core/resource.py", "arc/core/resource_test.py", "/app/arc/core/"]
-COPY ["arc/core/test/bar.py", "arc/core/test/baz_client.py", "arc/core/test/baz_server.py", "/app/arc/core/test/"]
 COPY [".gitignore", ".pylintrc", ".python-version", "Dockerfile", "Dockerfile.arc", "LICENSE", "Makefile", "README.md", "poetry.lock", "pyproject.toml", "/app/"]
 COPY ["arc/client.py", "arc/config.py", "arc/generic.py", "arc/kind.py", "arc/opts.py", "arc/project.py", "arc/project_test.py", "arc/scm.py", "arc/scm_test.py", "/app/arc/"]
 COPY ["arc/cmd/root.py", "arc/cmd/run.py", "/app/arc/cmd/"]
+COPY ["arc/core/bar_client.py", "arc/core/bar_server.py", "arc/core/client_builder.py", "arc/core/client_builder_test.py", "arc/core/foo.ipynb", "arc/core/foo_client.py", "arc/core/foo_server.py", "arc/core/lotsofunions_client.py", "arc/core/lotsofunions_server.py", "arc/core/resource.py", "arc/core/resource_test.py", "/app/arc/core/"]
+COPY ["arc/core/test/bar.py", "arc/core/test/baz_client.py", "arc/core/test/baz_server.py", "/app/arc/core/test/"]
 COPY ["arc/data/cache.py", "arc/data/cache_test.py", "arc/data/classifydigitsjob_server.py", "arc/data/encoding.py", "arc/data/job.py", "arc/data/job_new.py", "arc/data/job_test.py", "arc/data/oci.py", "arc/data/oci_test.py", "arc/data/refs.py", "arc/data/render.py", "arc/data/types.py", "arc/data/util.py", "/app/arc/data/"]
 COPY ["arc/data/shapes/classes.py", "arc/data/shapes/classes_test.py", "arc/data/shapes/image.py", "arc/data/shapes/labels.py", "arc/data/shapes/table.py", "arc/data/shapes/text.py", "arc/data/shapes/timeseries.py", "arc/data/shapes/video.py", "/app/arc/data/shapes/"]
 COPY ["arc/image/build.py", "arc/image/build_test.py", "arc/image/client.py", "arc/image/file.py", "arc/image/file_test.py", "arc/image/id.py", "arc/image/registry.py", "/app/arc/image/"]
@@ -34,4 +34,4 @@ COPY ["examples/mnist/models/keras/.python-version", "examples/mnist/models/kera
 COPY ["examples/mnist/models/torch/.env", "examples/mnist/models/torch/.python-version", "examples/mnist/models/torch/README.md", "examples/mnist/models/torch/classifier.py", "examples/mnist/models/torch/environment.yml", "/app/examples/mnist/models/torch/"]
 COPY ["static/logo.png", "/app/static/"]
 COPY .git /app/.git/
-CMD ["poetry", "run", "python", "/app/arc/core/lotsofunions_server.py"]
+CMD ["poetry", "run", "python", "/app/arc/core/bar_server.py"]

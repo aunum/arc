@@ -93,6 +93,21 @@ class Bar(Resource):
         for i in range(num):
             yield f"{i}: {a}"
 
+    def bake_hams(self, ham_by_name: Dict[str, Ham]) -> Dict[str, Ham]:
+        """Bake the given hams
+
+        Args:
+            ham_by_name (Dict[str, Ham]): A map of Ham to name
+
+        Returns:
+            Dict[str, bool]: Whether the Hams were baked
+        """
+        ret: Dict[str, Ham] = {}
+        for name, ham in ham_by_name.items():
+            ret[name] = ham
+
+        return ret
+
 
 def test_simple_create():
     scm = SCM()
@@ -142,6 +157,9 @@ def test_basic_ops():
     assert bar_client.add(1, 3) == 4
     bar_client.set("qoz", 5)
     assert bar_client.echo("yellow") == "yellow" + " -- hello! " + "a: " + "qoz" + " b: " + str(5)
+    hams = bar_client.bake_hams({"charles": Ham("baz", 1), "yanni": Ham("foo", 2)})
+    assert hams["charles"].__dict__ == Ham("baz", 1).__dict__
+    assert hams["yanni"].__dict__ == Ham("foo", 2).__dict__
     bar_client.delete()
 
     print("creating bar2")
@@ -317,14 +335,39 @@ class LotsOfUnions(Resource):
             h = Ham(h["a"], h["b"])
 
         if return_dict:
-            return h.__dict__
+            print("returning dictionary")
+            ret = h.__dict__
+            ret["c"] = True
+            return ret
 
+        print("not returning dictionary")
         return h
+
+    def optional_lists(
+        self, y: Union[List[Ham], Dict[str, Ham]], as_dict: bool = True
+    ) -> Union[List[Ham], Dict[str, Ham]]:
+        """Recieves lists and dictionaries of Ham
+
+        Args:
+            y (Union[List[Ham], Dict[str, Ham]]): A list or dictionary of Ham
+            as_dict (bool, optional): Return as a dicdtionary. Defaults to True.
+
+        Returns:
+            Union[List[Ham], Dict[str, Ham]]: A list or a dictionary of Ham
+        """
+        if as_dict and type(y) == list:
+            ret: Dict[str, Ham] = {}
+            for i, v in enumerate(y):
+                ret[str(i)] = v
+
+            return ret
+        return y
 
 
 def test_union():
     LouClient = LotsOfUnions.client(dev_dependencies=True, clean=False)
 
+    print("=== testing echo")
     lou = LouClient(1, {"this": "that", "then": "there"}, True)
     msg = lou.echo("spam")
     print("msg1: ", msg)
@@ -337,9 +380,37 @@ def test_union():
     assert lou.returns_optional("eggs") == "eggs"
     assert lou.returns_optional(1) is None
 
-    assert lou.optional_obj(Ham("foo", 4)) == Ham("foo", 4)
-    assert lou.optional_obj(Ham("bar", 5), True) == {"a": "bar", "b": 5}
-    assert lou.optional_obj({"a": "baz", "b": 6}) == Ham("baz", 6)
+    print("=== testing optional object")
+    a = lou.optional_obj(Ham("foo", 4))
+    print("a: ", a.__dict__)
+    assert a.__dict__ == Ham("foo", 4).__dict__
+
+    b = lou.optional_obj(Ham("bar", 5), True)
+    print("b: ", b)
+    assert b == {"a": "bar", "b": 5, "c": True}
+
+    c = lou.optional_obj({"a": "baz", "b": 6})
+    print("c: ", c.__dict__)
+    assert c.__dict__ == Ham("baz", 6)
+
+    print("=== testing optional lists")
+    d = lou.optional_lists([Ham("a", 1), Ham("b", 2)], False)
+    print("d: ", d)
+    assert type(d) == list
+    assert d[0].__dict__ == Ham("a", 1).__dict__
+    assert d[1].__dict__ == Ham("b", 2).__dict__
+
+    e = lou.optional_lists({"ham1": Ham("c", 3), "ham2": Ham("d", 4)})
+    print("e: ", e)
+    assert type(e) == dict
+    assert e["ham1"].__dict__ == Ham("c", 3).__dict__
+    assert e["ham2"].__dict__ == Ham("d", 4).__dict__
+
+    f = lou.optional_lists([Ham("a", 1), Ham("b", 2)])
+    print("f: ", f)
+    assert type(f) == dict
+    assert f["0"].__dict__ == Ham("a", 1).__dict__
+    assert f["1"].__dict__ == Ham("b", 2).__dict__
 
     lou.delete()
 
@@ -424,8 +495,8 @@ if __name__ == "__main__":
     # print("\n=====\ntesting simple create\n")
     # test_simple_create()
 
-    # print("\n=====\ntesting basic ops\n")
-    # test_basic_ops()
+    print("\n=====\ntesting basic ops\n")
+    test_basic_ops()
 
     # print("\n=====\ntesting stream\n")
     # test_stream()
@@ -442,5 +513,5 @@ if __name__ == "__main__":
     # print("\n=====\ntesting nested\n")
     # test_nested()
 
-    print("\n=====\ntesting union\n")
-    test_union()
+    # print("\n=====\ntesting union\n")
+    # test_union()

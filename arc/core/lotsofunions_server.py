@@ -1,4 +1,3 @@
-
 from typing import List
 import logging
 import os
@@ -15,8 +14,8 @@ from arc.core.resource import is_annotation_match  # noqa
 
 from resource_test import *
 from resource_test import LotsOfUnions
-import resource_test
 import typing
+import resource_test
 import arc.kind
 import arc.config
 
@@ -28,7 +27,6 @@ else:
 
 
 class LotsOfUnionsServer(LotsOfUnions):
-
     async def _diff_req(self, request):
         """Request for function:
         diff(self, uri: str) -> str
@@ -46,9 +44,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.diff(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -69,18 +69,22 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-        if 'txt' in _jdict:
+        if "txt" in _jdict:
 
-            if _jdict['txt'] is None:
+            if _jdict["txt"] is None:
                 pass
-            elif type(_jdict['txt']) == str:
+            elif type(_jdict["txt"]) == str:
                 pass
             else:
-                raise ValueError(f"Argument could not be deserialized: txt - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: txt - type: {type(_jdict['key'])}"
+                )
 
-
+        print("calling function: ", _jdict)
         _ret = self.echo(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -99,10 +103,11 @@ class LotsOfUnionsServer(LotsOfUnions):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
-        
 
-
+        print("calling function: ", _jdict)
         _ret = self.health(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -121,10 +126,11 @@ class LotsOfUnionsServer(LotsOfUnions):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
-        
 
-
+        print("calling function: ", _jdict)
         _ret = self.info(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -143,29 +149,34 @@ class LotsOfUnionsServer(LotsOfUnions):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
-        
 
-        if 'key' in _jdict:
+        if "key" in _jdict:
 
-            if _jdict['key'] is None:
+            if _jdict["key"] is None:
                 pass
-            elif type(_jdict['key']) == str:
-                pass
-            else:
-                raise ValueError(f"Argument could not be deserialized: key - type: {type(_jdict['key'])}")
-
-        if 'timeout' in _jdict:
-
-            if _jdict['timeout'] is None:
-                pass
-            elif type(_jdict['timeout']) == int:
+            elif type(_jdict["key"]) == str:
                 pass
             else:
-                raise ValueError(f"Argument could not be deserialized: timeout - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: key - type: {type(_jdict['key'])}"
+                )
 
+        if "timeout" in _jdict:
 
+            if _jdict["timeout"] is None:
+                pass
+            elif type(_jdict["timeout"]) == int:
+                pass
+            else:
+                raise ValueError(
+                    f"Argument could not be deserialized: timeout - type: {type(_jdict['key'])}"
+                )
+
+        print("calling function: ", _jdict)
         _ret = self.lock(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
 
         return JSONResponse(_ret)
 
@@ -186,10 +197,9 @@ class LotsOfUnionsServer(LotsOfUnions):
         if "data" in qs and len(qs["data"]) > 0:
             _jdict = json.loads(qs["data"][0])
 
-
         print("jdict: ", _jdict)
         for _ret in self.logs(**_jdict):
-            _ret = {'response': _ret}
+            _ret = {"response": _ret}
 
             print("seding json")
             await websocket.send_json(_ret)
@@ -197,7 +207,7 @@ class LotsOfUnionsServer(LotsOfUnions):
 
         print("all done sending data, closing socket")
         await websocket.close()
-                
+
     async def _merge_req(self, request):
         """Request for function:
         merge(self, uri: str) -> ~R
@@ -215,8 +225,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.merge(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -238,9 +250,58 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.notebook(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
+
+        return JSONResponse(_ret)
+
+    async def _optional_lists_req(self, request):
+        """Request for function:
+        optional_lists(self, y: Union[List[__main__.Ham], Dict[str, __main__.Ham]], as_dict: bool = True) -> Union[List[__main__.Ham], Dict[str, __main__.Ham]]
+        """
+
+        body = await request.body()
+        print("len body: ", len(body))
+        print("body: ", body)
+
+        _jdict = {}
+        if len(body) != 0:
+            _jdict = json.loads(body)
+
+        headers = request.headers
+        logging.debug(f"headers: {headers}")
+        self._check_lock(headers)
+
+        if json_is_type_match(typing.List[resource_test.Ham], _jdict["y"]):
+            print("checking type match match for typing.List")
+
+            _obj = object.__new__(typing.List)
+            for _k, _v in _jdict["y"].items():
+                setattr(_obj, _k, _v)
+            _jdict["y"] = _obj
+
+        elif json_is_type_match(typing.Dict[str, resource_test.Ham], _jdict["y"]):
+            print("checking type match match for typing.Dict")
+        else:
+            raise ValueError(
+                f"Argument could not be deserialized: y - type: {type(_jdict['key'])}"
+            )
+
+        print("calling function: ", _jdict)
+        _ret = self.optional_lists(**_jdict)
+
+        print("called function: ", _ret)
+        if isinstance(_ret, list) or isinstance(_ret, dict):
+            pass
+        elif isinstance(_ret, list) or isinstance(_ret, dict):
+            pass
+        else:
+            raise ValueError(
+                f'Argument could not be deserialized: typing.Union[typing.List[__main__.Ham], typing.Dict[str, __main__.Ham]] -- type: {type(_ret)}"'
+            )
 
         return JSONResponse(_ret)
 
@@ -261,37 +322,44 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
-        if is_annotation_match(resource_test.Ham.__annotations__, _jdict['h']):
+        if is_annotation_match(resource_test.Ham.__annotations__, _jdict["h"]):
+            print("checking annotation match for resource_test.Ham")
 
             _obj = object.__new__(resource_test.Ham)
-            for _k, _v in _jdict['h'].items():
+            for _k, _v in _jdict["h"].items():
                 setattr(_obj, _k, _v)
-            _jdict['h'] = _obj
+            _jdict["h"] = _obj
 
-        elif type(_jdict['h']) == typing.Dict:
-            pass
+        elif json_is_type_match(typing.Dict[str, typing.Any], _jdict["h"]):
+            print("checking type match match for typing.Dict")
         else:
-            raise ValueError(f"Argument could not be deserialized: h - type: {type(_jdict['key'])}")
+            raise ValueError(
+                f"Argument could not be deserialized: h - type: {type(_jdict['key'])}"
+            )
 
-        if 'return_dict' in _jdict:
+        if "return_dict" in _jdict:
 
-            if _jdict['return_dict'] is None:
+            if _jdict["return_dict"] is None:
                 pass
-            elif type(_jdict['return_dict']) == bool:
+            elif type(_jdict["return_dict"]) == bool:
                 pass
             else:
-                raise ValueError(f"Argument could not be deserialized: return_dict - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: return_dict - type: {type(_jdict['key'])}"
+                )
 
-
+        print("calling function: ", _jdict)
         _ret = self.optional_obj(**_jdict)
-        if is_annotation_match(resource_test.Ham.__annotations__, _ret):
+
+        print("called function: ", _ret)
+        if isinstance(_ret, resource_test.Ham):
             _ret = _ret.__dict__
-        elif isinstance(_ret, typing.Dict):
+        elif isinstance(_ret, list) or isinstance(_ret, dict):
             pass
         else:
-            raise ValueError(f'Argument could not be deserialized: typing.Union[__main__.Ham, typing.Dict[str, typing.Any]] -- type: {type(_ret)}"')
-
+            raise ValueError(
+                f'Argument could not be deserialized: typing.Union[__main__.Ham, typing.Dict[str, typing.Any]] -- type: {type(_ret)}"'
+            )
 
         return JSONResponse(_ret)
 
@@ -312,23 +380,27 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
-        if type(_jdict['a']) == str:
+        if type(_jdict["a"]) == str:
             pass
-        elif type(_jdict['a']) == int:
+        elif type(_jdict["a"]) == int:
             pass
         else:
-            raise ValueError(f"Argument could not be deserialized: a - type: {type(_jdict['key'])}")
+            raise ValueError(
+                f"Argument could not be deserialized: a - type: {type(_jdict['key'])}"
+            )
 
-
+        print("calling function: ", _jdict)
         _ret = self.returns_optional(**_jdict)
-        if isinstance(_ret, str):
-            _ret = {'response': _ret}
-        elif _ret is None:
-            _ret = {'response': None}
-        else:
-            raise ValueError(f'Argument could not be deserialized: typing.Optional[str] -- type: {type(_ret)}"')
 
+        print("called function: ", _ret)
+        if isinstance(_ret, str):
+            _ret = {"response": _ret}
+        elif _ret is None:
+            _ret = {"response": None}
+        else:
+            raise ValueError(
+                f'Argument could not be deserialized: typing.Optional[str] -- type: {type(_ret)}"'
+            )
 
         return JSONResponse(_ret)
 
@@ -349,9 +421,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.save(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
 
         return JSONResponse(_ret)
 
@@ -372,9 +446,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.source(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -395,9 +471,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.sync(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
 
         return JSONResponse(_ret)
 
@@ -416,20 +494,23 @@ class LotsOfUnionsServer(LotsOfUnions):
 
         headers = request.headers
         logging.debug(f"headers: {headers}")
-        
 
-        if 'key' in _jdict:
+        if "key" in _jdict:
 
-            if _jdict['key'] is None:
+            if _jdict["key"] is None:
                 pass
-            elif type(_jdict['key']) == str:
+            elif type(_jdict["key"]) == str:
                 pass
             else:
-                raise ValueError(f"Argument could not be deserialized: key - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: key - type: {type(_jdict['key'])}"
+                )
 
-
+        print("calling function: ", _jdict)
         _ret = self.unlock(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
 
         return JSONResponse(_ret)
 
@@ -450,8 +531,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.base_names(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
@@ -473,9 +556,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.clean_artifacts(**_jdict)
-        _ret = {'response': None}
+
+        print("called function: ", _ret)
+        _ret = {"response": None}
 
         return JSONResponse(_ret)
 
@@ -496,14 +581,15 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
         _obj = object.__new__(arc.kind.ObjectLocator)
-        for _k, _v in _jdict['locator'].items():
+        for _k, _v in _jdict["locator"].items():
             setattr(_obj, _k, _v)
-        _jdict['locator'] = _obj
+        _jdict["locator"] = _obj
 
-
+        print("calling function: ", _jdict)
         _ret = self.find(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
@@ -525,8 +611,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.from_env(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -548,8 +636,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.labels(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -570,8 +660,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.load(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.to_dict()
 
         return JSONResponse(_ret)
@@ -593,9 +685,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.name(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -616,8 +710,10 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.opts_schema(**_jdict)
+
+        print("called function: ", _ret)
 
         return JSONResponse(_ret)
 
@@ -638,9 +734,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.schema(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -661,9 +759,11 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-
+        print("calling function: ", _jdict)
         _ret = self.short_name(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -684,11 +784,16 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-        if 'sync_strategy' in _jdict:
-            _jdict['sync_strategy'] = arc.config.RemoteSyncStrategy(_jdict['sync_strategy'])
+        if "sync_strategy" in _jdict:
+            _jdict["sync_strategy"] = arc.config.RemoteSyncStrategy(
+                _jdict["sync_strategy"]
+            )
 
+        print("calling function: ", _jdict)
         _ret = self.store_cls(**_jdict)
-        _ret = {'response': _ret}
+
+        print("called function: ", _ret)
+        _ret = {"response": _ret}
 
         return JSONResponse(_ret)
 
@@ -709,37 +814,86 @@ class LotsOfUnionsServer(LotsOfUnions):
         logging.debug(f"headers: {headers}")
         self._check_lock(headers)
 
-        if 'repositories' in _jdict:
+        if "repositories" in _jdict:
 
-            if _jdict['repositories'] is None:
+            if _jdict["repositories"] is None:
                 pass
-            elif type(_jdict['repositories']) == typing.List:
-                pass
+            elif json_is_type_match(typing.List[str], _jdict["repositories"]):
+                print("checking type match match for typing.List")
+
+                _obj = object.__new__(typing.List)
+                for _k, _v in _jdict["repositories"].items():
+                    setattr(_obj, _k, _v)
+                _jdict["repositories"] = _obj
+
             else:
-                raise ValueError(f"Argument could not be deserialized: repositories - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: repositories - type: {type(_jdict['key'])}"
+                )
 
-        if 'cfg' in _jdict:
+        if "cfg" in _jdict:
 
-            if _jdict['cfg'] is None:
+            if _jdict["cfg"] is None:
                 pass
-            elif is_annotation_match(arc.config.Config.__annotations__, _jdict['cfg']):
+            elif is_annotation_match(arc.config.Config.__annotations__, _jdict["cfg"]):
+                print("checking annotation match for arc.config.Config")
 
                 _obj = object.__new__(arc.config.Config)
-                for _k, _v in _jdict['cfg'].items():
+                for _k, _v in _jdict["cfg"].items():
                     setattr(_obj, _k, _v)
-                _jdict['cfg'] = _obj
+                _jdict["cfg"] = _obj
 
             else:
-                raise ValueError(f"Argument could not be deserialized: cfg - type: {type(_jdict['key'])}")
+                raise ValueError(
+                    f"Argument could not be deserialized: cfg - type: {type(_jdict['key'])}"
+                )
 
-
+        print("calling function: ", _jdict)
         _ret = self.versions(**_jdict)
+
+        print("called function: ", _ret)
         _ret = _ret.__dict__
 
         return JSONResponse(_ret)
 
     def _routes(self) -> List[BaseRoute]:
-        return [Route('/diff', endpoint=self._diff_req, methods=['POST']), Route('/echo', endpoint=self._echo_req, methods=['POST']), Route('/health', endpoint=self._health_req, methods=['GET','POST']), Route('/info', endpoint=self._info_req, methods=['POST']), Route('/lock', endpoint=self._lock_req, methods=['POST']), WebSocketRoute('/logs', endpoint=self._logs_req), Route('/merge', endpoint=self._merge_req, methods=['POST']), Route('/notebook', endpoint=self._notebook_req, methods=['POST']), Route('/optional_obj', endpoint=self._optional_obj_req, methods=['POST']), Route('/returns_optional', endpoint=self._returns_optional_req, methods=['POST']), Route('/save', endpoint=self._save_req, methods=['POST']), Route('/source', endpoint=self._source_req, methods=['POST']), Route('/sync', endpoint=self._sync_req, methods=['POST']), Route('/unlock', endpoint=self._unlock_req, methods=['POST']), Route('/base_names', endpoint=self._base_names_req, methods=['POST']), Route('/clean_artifacts', endpoint=self._clean_artifacts_req, methods=['POST']), Route('/find', endpoint=self._find_req, methods=['POST']), Route('/from_env', endpoint=self._from_env_req, methods=['POST']), Route('/labels', endpoint=self._labels_req, methods=['POST']), Route('/load', endpoint=self._load_req, methods=['POST']), Route('/name', endpoint=self._name_req, methods=['POST']), Route('/opts_schema', endpoint=self._opts_schema_req, methods=['POST']), Route('/schema', endpoint=self._schema_req, methods=['POST']), Route('/short_name', endpoint=self._short_name_req, methods=['POST']), Route('/store_cls', endpoint=self._store_cls_req, methods=['POST']), Route('/versions', endpoint=self._versions_req, methods=['POST'])]
+        return [
+            Route("/diff", endpoint=self._diff_req, methods=["POST"]),
+            Route("/echo", endpoint=self._echo_req, methods=["POST"]),
+            Route("/health", endpoint=self._health_req, methods=["GET", "POST"]),
+            Route("/info", endpoint=self._info_req, methods=["POST"]),
+            Route("/lock", endpoint=self._lock_req, methods=["POST"]),
+            WebSocketRoute("/logs", endpoint=self._logs_req),
+            Route("/merge", endpoint=self._merge_req, methods=["POST"]),
+            Route("/notebook", endpoint=self._notebook_req, methods=["POST"]),
+            Route(
+                "/optional_lists", endpoint=self._optional_lists_req, methods=["POST"]
+            ),
+            Route("/optional_obj", endpoint=self._optional_obj_req, methods=["POST"]),
+            Route(
+                "/returns_optional",
+                endpoint=self._returns_optional_req,
+                methods=["POST"],
+            ),
+            Route("/save", endpoint=self._save_req, methods=["POST"]),
+            Route("/source", endpoint=self._source_req, methods=["POST"]),
+            Route("/sync", endpoint=self._sync_req, methods=["POST"]),
+            Route("/unlock", endpoint=self._unlock_req, methods=["POST"]),
+            Route("/base_names", endpoint=self._base_names_req, methods=["POST"]),
+            Route(
+                "/clean_artifacts", endpoint=self._clean_artifacts_req, methods=["POST"]
+            ),
+            Route("/find", endpoint=self._find_req, methods=["POST"]),
+            Route("/from_env", endpoint=self._from_env_req, methods=["POST"]),
+            Route("/labels", endpoint=self._labels_req, methods=["POST"]),
+            Route("/load", endpoint=self._load_req, methods=["POST"]),
+            Route("/name", endpoint=self._name_req, methods=["POST"]),
+            Route("/opts_schema", endpoint=self._opts_schema_req, methods=["POST"]),
+            Route("/schema", endpoint=self._schema_req, methods=["POST"]),
+            Route("/short_name", endpoint=self._short_name_req, methods=["POST"]),
+            Route("/store_cls", endpoint=self._store_cls_req, methods=["POST"]),
+            Route("/versions", endpoint=self._versions_req, methods=["POST"]),
+        ]
 
 
 o = LotsOfUnionsServer.from_env()
@@ -762,4 +916,3 @@ if __name__ == "__main__":
         reload=True,
         reload_dirs=pkgs.keys(),
     )
-        
